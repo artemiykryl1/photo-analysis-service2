@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Пишет unit/integration/contract‑тесты, покрывающие критерии приёмки и устойчивость к сбоям. Используй ПОСЛЕ двух APPROVE от ревьюверов. Покрывает валидацию, S3/Kafka‑поток, идемпотентность, деградацию. Returns tasks/<ID>/50_tests.md + тестовые файлы.
+description: Пишет unit/integration/contract‑тесты, покрывающие критерии приёмки и устойчивость к сбоям. Используй ПОСЛЕ двух APPROVE от ревьюверов. Покрывает валидацию, MinIO/Kafka‑поток, идемпотентность, деградацию. Returns tasks/<ID>/50_tests.md + тестовые файлы.
 tools: Read, Write, Edit, Bash, Grep, Glob
 model: sonnet
 ---
