@@ -1,6 +1,6 @@
 # TASK-000 — Bootstrap каркаса photo-service
 
-**Статус:** in_progress
+**Статус:** ⚠️ RUNTIME-БАГ найден при живом docker-прогоне (миграция) → test-debugger. Ранее: DONE — PR #2 (https://github.com/artemiykryl1/photo-analysis-service2/pull/2), ветка feat/task-000-bootstrap, коммит 7f30bd0. Ожидает ревью/мёрж + ручной docker-прогон. documenter не вызывался (путь «test-writer→коммит»).
 **Скоуп:** вертикальный срез Client → API → PostgreSQL/MinIO. Kafka, worker, analyzer — НЕ реализуем (спринт 2).
 **Стек:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy async, Alembic, PostgreSQL, MinIO, Docker Compose, uv.
 
@@ -37,7 +37,12 @@
 - Ручной пункт: живой `docker compose up --build` на машине с Docker.
 - Следующий шаг: коммит каркаса (ждёт решения пользователя по scope: commit-only / commit+PR).
 
-| 8 | pr-publisher | 70_pr.md | запущен — пользователь разрешил Коммит+PR |
+| 8 | pr-publisher | 70_pr.md | ✅ PR #2 опубликован |
+| 9 | test-debugger | 60_debug.md | ✅ фикс: create_type=False; offline SQL CREATE TYPE ×1; 70 passed |
+
+**Статус после фикса:** миграция исправлена (create_type=False). Ожидает: (а) пользователь пере-прогонит `docker compose down -v && up --build` для подтверждения живого /healthz; (б) фикс НЕ закоммичен — нужно обновить ветку feat/task-000-bootstrap / PR #2 (спросить пользователя).
+
+**RUNTIME-БАГ (найден пользователем на `docker compose up`):** миграция v001 создаёт enum `photo_status` дважды → `asyncpg DuplicateObjectError: type "photo_status" already exists`. Причина: `photo_status_enum.create(checkfirst=True)` (стр.29) + неявный CREATE TYPE внутри `op.create_table` (postgresql.ENUM default `create_type=True`). Падает на чистой БД. Пропущено тестами: offline `--sql` + моки не исполняли реальный DDL. Фикс: `create_type=False` на enum. → test-debugger. После фикса пользователю: `docker compose down -v && docker compose up --build`.
 
 **Разрешение пользователя на PR: ДА** (репо artemiykryl1/photo-analysis-service2, base main, ветка feat/task-000-bootstrap, коммитим photo-service/ + tasks/).
 

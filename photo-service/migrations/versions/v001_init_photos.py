@@ -20,7 +20,7 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 photo_status_enum = postgresql.ENUM(
-    "queued", "analyzing", "done", "error", name="photo_status"
+    "queued", "analyzing", "done", "error", name="photo_status", create_type=False
 )
 
 
