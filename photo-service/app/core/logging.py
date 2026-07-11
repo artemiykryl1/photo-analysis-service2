@@ -1,0 +1,60 @@
+"""Structured JSON logging setup.
+
+Logs are emitted as JSON to stdout so they can be collected by the
+container runtime / log shipper (ELK, Loki) per constitution.md §3.1.
+
+`trace_id_var` is a contextvar reserved for the future request-scoped
+trace id. In TASK-000 nothing populates it yet (no HTTP middleware) -
+that is a TODO for TASK-001, where a middleware should set it per
+request (e.g. from an incoming header or generated uuid4) and reset it
+after the request completes.
+
+Security note (constitution.md §3.3): do not log full MinIO object
+paths, raw user_id, or file contents. Keep this in mind when adding
+log statements in services/integrations layers.
+"""
+
+import logging
+import sys
+from contextvars import ContextVar
+
+from pythonjsonlogger import jsonlogger
+
+SERVICE_NAME = "photo-service"
+
+# TODO(TASK-001): populate this from an HTTP middleware (trace_id per request,
+# e.g. taken from an inbound header or generated as uuid4) and reset on
+# request completion via a context manager / try-finally.
+trace_id_var: ContextVar[str] = ContextVar("trace_id", default="-")
+
+
+class TraceIdFilter(logging.Filter):
+    """Injects the current contextvar trace_id into every log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.trace_id = trace_id_var.get()
+        record.service = SERVICE_NAME
+        return True
+
+
+def setup_logging(level: str = "INFO") -> None:
+    """Configure root logger with a single JSON stdout handler.
+
+    Idempotent-ish: clears any previously attached handlers on the root
+    logger before adding the new one, so calling it twice (e.g. in tests)
+    does not duplicate log lines.
+    """
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level.upper())
+
+    for existing_handler in list(root_logger.handlers):
+        root_logger.removeHandler(existing_handler)
+
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(service)s %(trace_id)s %(message)s",
+        rename_fields={"asctime": "timestamp", "levelname": "level"},
+    )
+    handler.setFormatter(formatter)
+    handler.addFilter(TraceIdFilter())
+    root_logger.addHandler(handler)
