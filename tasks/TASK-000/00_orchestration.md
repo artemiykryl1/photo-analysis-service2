@@ -1,6 +1,6 @@
 # TASK-000 — Bootstrap каркаса photo-service
 
-**Статус:** ⚠️ RUNTIME-БАГ найден при живом docker-прогоне (миграция) → test-debugger. Ранее: DONE — PR #2 (https://github.com/artemiykryl1/photo-analysis-service2/pull/2), ветка feat/task-000-bootstrap, коммит 7f30bd0. Ожидает ревью/мёрж + ручной docker-прогон. documenter не вызывался (путь «test-writer→коммит»).
+**Статус:** ✅ DONE (живой прогон подтверждён пользователем). PR #2, коммиты 7f30bd0 (каркас) + 966f6de (фикс миграции). Живой `docker compose up` → `/healthz` 200 OK на реальном Postgres+MinIO. Ожидает мёржа на GitHub. (https://github.com/artemiykryl1/photo-analysis-service2/pull/2), ветка feat/task-000-bootstrap, коммит 7f30bd0. Ожидает ревью/мёрж + ручной docker-прогон. documenter не вызывался (путь «test-writer→коммит»).
 **Скоуп:** вертикальный срез Client → API → PostgreSQL/MinIO. Kafka, worker, analyzer — НЕ реализуем (спринт 2).
 **Стек:** Python 3.12, FastAPI, Pydantic v2, SQLAlchemy async, Alembic, PostgreSQL, MinIO, Docker Compose, uv.
 

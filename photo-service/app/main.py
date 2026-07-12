@@ -13,6 +13,7 @@ from fastapi import FastAPI, Response
 from sqlalchemy import text
 
 from app.api import photos
+from app.api.middleware import RequestIdMiddleware
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.logging import setup_logging
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
+app.add_middleware(RequestIdMiddleware)
 register_exception_handlers(app)
 app.include_router(photos.router)
 

@@ -4,7 +4,7 @@ Every domain error is a subclass of `AppError`. `register_exception_handlers`
 wires a single FastAPI exception handler that converts any `AppError` into
 the unified JSON error body described in feature-upload/spec.md §2:
 
-    { "error_code": "...", "message": "...", "trace_id": "..." }
+    { "error_code": "...", "message": "...", "request_id": "..." }
 """
 
 import logging
@@ -25,9 +25,10 @@ class AppError(Exception):
     http_status: int = 500
     message: str = "Internal server error"
 
-    def __init__(self, message: str | None = None) -> None:
+    def __init__(self, message: str | None = None, *, photo_id: str | None = None) -> None:
         if message is not None:
             self.message = message
+        self.photo_id = photo_id
         super().__init__(self.message)
 
 
@@ -48,7 +49,7 @@ class NotFoundError(AppError):
 
 
 class ValidationError(AppError):
-    """Raised on invalid input (e.g. bad file type/size)."""
+    """Raised on invalid input (e.g. empty file)."""
 
     error_code = "INVALID_FILE"
     http_status = 400
@@ -63,19 +64,58 @@ class ConflictError(AppError):
     message = "Conflict"
 
 
+class PayloadTooLargeError(AppError):
+    """Raised when the uploaded file exceeds the size limit (50 MB)."""
+
+    error_code = "PAYLOAD_TOO_LARGE"
+    http_status = 413
+    message = "File exceeds the maximum allowed size"
+
+
+class UnsupportedMediaTypeError(AppError):
+    """Raised when the uploaded file is not a recognized JPEG/PNG (magic bytes)."""
+
+    error_code = "UNSUPPORTED_MEDIA_TYPE"
+    http_status = 415
+    message = "Unsupported media type"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
-    """Register a handler that converts any AppError into ErrorResponse JSON."""
+    """Register handlers that convert any exception into ErrorResponse JSON.
+
+    Two handlers are registered:
+    - `AppError` -> its own `error_code`/`http_status`/`message`.
+    - `Exception` (catch-all) -> generic 500 `INTERNAL_ERROR`, so an
+      unexpected failure (e.g. `session.commit()` blowing up) still
+      returns the unified error body instead of a bare framework 500
+      (reviewer-1 N1). The real exception is logged with `exc_info` but
+      never leaked into the response body.
+    """
 
     @app.exception_handler(AppError)
     async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
-        trace_id = trace_id_var.get()
+        request_id = trace_id_var.get()
         logger.error(
             "request failed with %s: %s",
             exc.error_code,
             exc.message,
-            extra={"error_code": exc.error_code},
+            extra={"error_code": exc.error_code, "photo_id": getattr(exc, "photo_id", None)},
         )
         body = ErrorResponse(
-            error_code=exc.error_code, message=exc.message, trace_id=trace_id
+            error_code=exc.error_code, message=exc.message, request_id=request_id
         )
         return JSONResponse(status_code=exc.http_status, content=body.model_dump())
+
+    @app.exception_handler(Exception)
+    async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+        request_id = trace_id_var.get()
+        logger.exception(
+            "request failed with unhandled exception",
+            extra={"error_code": "INTERNAL_ERROR", "photo_id": None},
+        )
+        body = ErrorResponse(
+            error_code="INTERNAL_ERROR",
+            message="Internal server error",
+            request_id=request_id,
+        )
+        return JSONResponse(status_code=500, content=body.model_dump())

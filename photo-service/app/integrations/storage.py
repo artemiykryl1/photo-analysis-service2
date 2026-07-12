@@ -1,16 +1,16 @@
 """MinIO object storage wrapper.
 
 Photos are stored in MinIO only - the database (`db/models.py::Photo`)
-holds nothing but metadata (`s3_path`). This module is the single place
+holds nothing but metadata (`object_key`). This module is the single place
 allowed to talk to the MinIO SDK; `services/`/`api/` must go through it.
 
 The underlying `minio` SDK is synchronous. `ensure_bucket` is fine to call
 as-is because it only runs once during application startup (lifespan),
-outside of the request/response cycle. `save_file`/`get_file` are also
-synchronous for now (bootstrap scope) -
-TODO(TASK-001): wrap these calls with `anyio.to_thread.run_sync(...)` when
-they get invoked from async request handlers, so they do not block the
-event loop.
+outside of the request/response cycle. `save_file`/`get_file`/`delete_file`
+remain synchronous here - callers running inside async request handlers
+(services/photo_service.py) are responsible for wrapping calls with
+`anyio.to_thread.run_sync(...)` so they do not block the event loop
+(see tasks/TASK-001/20_design.md §4.4).
 """
 
 import io
@@ -23,6 +23,20 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, StorageUnavailable
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_object_name(object_name: str) -> None:
+    """Reject object names that could escape the intended prefix.
+
+    `object_key` is always built by the service layer from a fresh uuid4
+    (`photos/{photo_id}/original.<ext>`), so in practice this should be
+    unreachable - it is defense-in-depth (constitution.md §3.3), not the
+    primary sanitization mechanism. Raises `ValueError` (a programming
+    error, not a runtime/user-facing condition) rather than a domain
+    `AppError`, since untrusted input never reaches this function.
+    """
+    if ".." in object_name or "//" in object_name:
+        raise ValueError(f"unsafe object name: {object_name!r}")
 
 
 class ObjectStorage:
@@ -54,11 +68,11 @@ class ObjectStorage:
     ) -> str:
         """Store an object in the configured bucket.
 
-        Returns the resulting `s3_path` (`bucket/object_name`).
-
-        TODO(TASK-001): full path/filename validation (no `../`, `//`) and
-        multipart upload for large files belongs here.
+        Returns the resulting `bucket/object_key` (informational only -
+        callers persist the `object_name` they passed in, not this
+        return value).
         """
+        _validate_object_name(object_name)
         try:
             self._client.put_object(
                 self._bucket,
@@ -86,3 +100,16 @@ class ObjectStorage:
                 raise NotFoundError("Object not found") from exc
             logger.error("failed to read object from MinIO: %s", exc)
             raise StorageUnavailable("MinIO is unreachable") from exc
+
+    def delete_file(self, object_name: str) -> None:
+        """Best-effort delete, used as compensation for an orphaned object
+        (e.g. MinIO save succeeded but the DB commit that should follow it
+        failed). Swallows `NoSuchKey` - deleting an already-absent object
+        is not an error for a compensating action.
+        """
+        try:
+            self._client.remove_object(self._bucket, object_name)
+        except S3Error as exc:
+            if exc.code == "NoSuchKey":
+                return
+            logger.warning("failed to delete orphaned object from MinIO: %s", exc)
