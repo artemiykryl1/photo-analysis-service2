@@ -30,7 +30,7 @@ Kafka, worker, вызов analyzer, Prometheus/Grafana, K8s, gRPC-вызов (т
 | 5 | coder (итерация 2) | 30_impl.md | ✅ B1+N1 исправлены — 87 passed, ruff clean |
 | 6 | reviewer-1 (re-review) | 40_review-1.md | ✅ APPROVE — B1+N1 закрыты |
 | 7 | test-writer | 50_tests.md + тесты | ✅ 173 passed / 1 skipped, cov 99% app/, ruff clean |
-| 8 | pr-publisher | 70_pr.md | ожидает разрешения пользователя |
+| 8 | pr-publisher | 70_pr.md | ✅ done — PR #3 опубликован |
 
 **Статус TASK-001:** все проектные гейты пройдены (2×APPROVE, тесты зелёные, coverage 99% ≥85%). Осталось: (а) живой `docker compose down -v && up --build` + curl-сценарий + `pytest -m integration` у пользователя; (б) разрешение пользователя на PR.
 **Гигиена для pr-publisher:** `.coverage` уже отслеживается в git с TASK-000 (по замечанию test-writer) — при коммите TASK-001 сделать `git rm --cached .coverage` и убедиться, что он в .gitignore.
