@@ -21,7 +21,7 @@
 ### 2.1 Микросервисная архитектура
 
 - **API Gateway** — единая точка входа (HTTP).
-- **Photo Service** — управление фотографиями, S3, БД.
+- **Photo Service** — управление фотографиями, MinIO, БД.
 - **Analyzer Service** — асинхронная обработка через Kafka (external dependency).
 - **Result Service** — хранение результатов анализа.
 - **Notification Service** — опционально: уведомления о готовности.
@@ -49,7 +49,7 @@
   - `analysis_results` таблица (photo_id, blur_score, face_count, duplicate_id, quality_issues).
   - Индексы на (user_id, uploaded_at), (photo_id).
   
-- **S3 (или локальное хранилище для разработки)**:
+- **MinIO (S3-совместимое объектное хранилище)**:
   - Путь: `photos/{user_id}/{photo_id}.jpg`.
   - Лимиты: не более 50 МБ, только JPEG/PNG.
 
@@ -93,7 +93,7 @@
 **Метрики (Prometheus/OpenTelemetry):**
 - RED (Request/Error/Duration): для HTTP-эндпоинтов.
 - USE (Utilization/Saturation/Errors): для ресурсов (CPU, mem, disk, Kafka lag).
-- Кастомные: `upload_duration_seconds`, `kafka_publish_latency_ms`, `s3_operation_duration_seconds`.
+- Кастомные: `upload_duration_seconds`, `kafka_publish_latency_ms`, `minio_operation_duration_seconds`.
 
 **Трассировка (Jaeger):**
 - Все сервисы отправляют spans в Jaeger.
@@ -106,12 +106,12 @@
 ### 3.2 Отказоустойчивость
 
 **Таймауты:**
-- HTTP запросы: 30s (по умолчанию); для S3 — 60s.
+- HTTP запросы: 30s (по умолчанию); для MinIO — 60s.
 - Kafka: 10s на publish, 30s на consume.
 - БД: 5s на один запрос.
 
 **Circuit Breaker:**
-- Если S3 недоступен → возвращаем 503 (Unavailable), а не 500.
+- Если MinIO недоступен → возвращаем 503 (Unavailable), а не 500.
 - Если Kafka недоступна → возвращаем 503, но файл сохранён в локальной очереди (для ретрая).
 
 **Graceful Shutdown:**
@@ -128,7 +128,7 @@
 **Входные данные:**
 - Валидация типа загруженного файла (MIME-type по magic bytes, не только расширению).
 - Валидация размера (макс 50 МБ).
-- Санитизация пути S3 (нет `../`, `//`).
+- Санитизация пути MinIO (нет `../`, `//`).
 
 **Авторизация:**
 - API требует Bearer token (JWT).
@@ -136,7 +136,7 @@
 - Нет хардкода секретов в коде; используются переменные окружения или vault.
 
 **Логирование:**
-- Не логируем целиком пути S3, ID пользователей в plain text.
+- Не логируем целиком пути MinIO, ID пользователей в plain text.
 - Не логируем содержимое файлов.
 
 ### 3.4 Производительность
@@ -147,7 +147,7 @@
 - Размер сообщения Kafka: макс 10 МБ.
 
 **Оптимизация:**
-- Параллельная загрузка в S3 (multipart upload для больших файлов).
+- Параллельная загрузка в MinIO (multipart upload для больших файлов).
 - Connection pooling для БД (макс 50 connection в пуле).
 - Кэширование результатов анализа (Redis, TTL 1 день).
 
@@ -157,12 +157,12 @@
 
 | Компонент | Выбор | Обоснование |
 |-----------|-------|-------------|
-| **Язык backend** | Go (Golang) | Производительность, простота деплоя, good stdlib. |
-| **Framework HTTP** | Gin или Echo | Лёгкий, быстрый, встроена valидация. |
+| **Язык backend** | Python | Быстрая разработка, богатая экосистема (FastAPI, asyncio), достаточна производительность для I/O-bound сервиса. |
+| **Framework HTTP** | FastAPI | Асинхронный, быстрый, встроена валидация (Pydantic), автогенерация OpenAPI. |
 | **СУБД** | PostgreSQL | ACID, надёжна, поддержка сложных запросов. |
 | **Кэш** | Redis | Быстрый KV store для результатов. |
 | **Message queue** | Apache Kafka | Асинхрон обработка, масштабируемость, гарантии доставки. |
-| **Object storage** | AWS S3 или MinIO (dev) | Стандартный интерфейс, масштабируемый. |
+| **Object storage** | MinIO | S3-совместимое объектное хранилище, self-hosted, без зависимости от AWS. |
 | **Логирование** | ELK или Loki + Grafana | Структурные логи, полнотекстовый поиск. |
 | **Метрики** | Prometheus | Стандарт в K8s. |
 | **Трассировка** | Jaeger | Open-source, хорошая интеграция. |
@@ -206,33 +206,33 @@
 photo-analysis-service/
 ├── .github/workflows/           # CI/CD (GitHub Actions)
 ├── api-gateway/
-│   ├── main.go
+│   ├── main.py
 │   ├── handler/
-│   │   ├── upload.go            # POST /api/v1/photos
-│   │   ├── status.go            # GET /api/v1/photos/{id}
-│   │   └── list.go              # GET /api/v1/photos (with pagination)
+│   │   ├── upload.py            # POST /api/v1/photos
+│   │   ├── status.py            # GET /api/v1/photos/{id}
+│   │   └── list.py              # GET /api/v1/photos (with pagination)
 │   ├── middleware/
-│   │   ├── auth.go              # JWT validation
-│   │   ├── logging.go           # trace_id injection
-│   │   └── error.go             # error formatting
+│   │   ├── auth.py              # JWT validation
+│   │   ├── logging.py           # trace_id injection
+│   │   └── error.py             # error formatting
 │   └── Dockerfile
 ├── photo-service/
-│   ├── main.go
+│   ├── main.py
 │   ├── service/
-│   │   ├── photo.go             # бизнес-логика
-│   │   ├── s3_uploader.go       # S3 integration
-│   │   └── kafka_producer.go    # publish events
+│   │   ├── photo.py             # бизнес-логика
+│   │   ├── minio_uploader.py    # MinIO integration
+│   │   └── kafka_producer.py    # publish events
 │   ├── repository/
-│   │   └── photo_repo.go        # DB queries
+│   │   └── photo_repo.py        # DB queries
 │   ├── models/
-│   │   └── photo.go
+│   │   └── photo.py
 │   └── Dockerfile
 ├── result-service/
-│   ├── main.go
+│   ├── main.py
 │   ├── service/
-│   │   └── result.go            # сохранение результатов
+│   │   └── result.py            # сохранение результатов
 │   ├── models/
-│   │   └── result.go
+│   │   └── result.py
 │   └── Dockerfile
 ├── migrations/
 │   ├── v001_init.sql
@@ -259,8 +259,8 @@ photo-analysis-service/
 │       └── data-flow.png
 ├── tests/
 │   ├── integration/
-│   │   ├── upload_test.go
-│   │   └── analysis_test.go
+│   │   ├── test_upload.py
+│   │   └── test_analysis.py
 │   └── contract/              # consumer-driven contract tests
 ├── specs/
 │   ├── constitution.md        # этот файл
@@ -289,7 +289,7 @@ photo-analysis-service/
 │   ├── TASK-002/
 │   └── ...
 ├── README.md
-└── go.mod, go.sum
+└── pyproject.toml, requirements.txt
 ```
 
 ---
@@ -301,7 +301,7 @@ photo-analysis-service/
 - [ ] Репозиторий создан на GitHub/GitLab.
 - [ ] БД инициализирована (миграция v001).
 - [ ] Kafka локально поднята (docker-compose).
-- [ ] S3/MinIO доступны.
+- [ ] MinIO доступен.
 - [ ] CI/CD pipeline сконфигурирован (запуск тестов, build).
 - [ ] Трекер (Jira/Trello) подготовлен для задач.
 - [ ] ВК Доска создана для диаграмм.
@@ -318,7 +318,7 @@ photo-analysis-service/
 
 **Ежемесячно:**
 - Ревью document аccess patterns; нужны ли индексы?
-- Проверка S3/БД usage.
+- Проверка MinIO/БД usage.
 
 **Перед release:**
 - Load testing (150% expected peak).

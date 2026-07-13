@@ -139,7 +139,7 @@ claude mcp list
 ### 6.1 Запуск конвейера
 
 ```
-Возьми TASK-001 из specs/feature-upload/tasks.md (загрузка фото в S3 + публикация в Kafka,
+Возьми TASK-001 из specs/feature-upload/tasks.md (загрузка фото в MinIO + публикация в Kafka,
 эндпоинт POST /api/v1/photos). Спека: specs/feature-upload/spec.md.
 Веди её по SDD‑конвейеру согласно CLAUDE.md, делегируя субагентам по очереди.
 Перед каждым шагом коротко сообщай, кого вызываешь и зачем.
