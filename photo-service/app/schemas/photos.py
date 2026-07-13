@@ -1,10 +1,6 @@
-"""Pydantic DTOs for the photos domain and shared error response shape.
+"""Pydantic DTOs for the photos domain and shared error response shape."""
 
-Upload-related request/response DTOs (e.g. `PhotoUploadResponse`) are
-intentionally NOT defined yet - they belong to TASK-001 together with the
-`POST /api/v1/photos` endpoint. Only the pieces needed by the bootstrap
-skeleton (health check + error format) live here for now.
-"""
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -21,8 +17,19 @@ class ErrorResponse(BaseModel):
 
     error_code: str
     message: str
-    trace_id: str
+    request_id: str
 
 
-# TODO(TASK-001): add PhotoUploadResponse (photo_id, user_id, status, created_at)
-# and PhotoStatusResponse once POST /api/v1/photos is implemented.
+class UploadPhotoResponse(BaseModel):
+    """Body of `POST /v1/photos` on success (HTTP 202)."""
+
+    photo_id: str
+    status: Literal["pending"]
+
+
+class PhotoResponse(BaseModel):
+    """Body of `GET /v1/photos/{photo_id}` and items of `GET /v1/photos`."""
+
+    id: str
+    filename: str
+    status: Literal["pending", "processing", "done", "failed"]

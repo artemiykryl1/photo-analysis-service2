@@ -1,0 +1,29 @@
+// Contract for the (future) Analyzer Service gRPC interface.
+//
+// TASK-001 scope: definition only. No Python stubs are generated here (no
+// `grpcio-tools`/`protobuf` dependency added) - see
+// tasks/TASK-001/20_design.md §9. The real invocation path is asynchronous
+// via Kafka (`photos-to-analyze` / `analysis-results` topics per
+// constitution.md §2.4), not a direct gRPC call from photo-service; this
+// contract documents the analyzer-side request/response shape referenced
+// by `app/integrations/analyzer_client.py` (TODO(TASK-002)).
+
+syntax = "proto3";
+
+package photo.analyzer.v1;
+
+service PhotoAnalyzer {
+  rpc AnalyzePhoto(AnalyzePhotoRequest) returns (AnalyzePhotoResponse);
+}
+
+message AnalyzePhotoRequest {
+  string photo_id = 1;
+  string object_key = 2;
+}
+
+message AnalyzePhotoResponse {
+  int32 faces_count = 1;
+  bool is_blurred = 2;
+  double blur_score = 3;
+  string perceptual_hash = 4;
+}

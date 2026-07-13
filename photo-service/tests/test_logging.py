@@ -1,10 +1,11 @@
 """Tests for `app.core.logging`.
 
 Verifies: JSON output on stdout, `LOG_LEVEL` is honored, `trace_id_var`
-contextvar defaults to "-" and is picked up per-record by
-`TraceIdFilter`, and `setup_logging()` is safe to call repeatedly
-(idempotent handler registration - important because tests import
-`app.main`, which calls `setup_logging` at import time).
+contextvar defaults to "-" and is picked up per-record by `TraceIdFilter`
+under both the `trace_id` (constitution.md §3.1) and `request_id`
+(feature-upload DoD) field names, and `setup_logging()` is safe to call
+repeatedly (idempotent handler registration - important because tests
+import `app.main`, which calls `setup_logging` at import time).
 """
 
 import json
@@ -49,6 +50,7 @@ def test_log_record_emits_valid_json_with_expected_fields(capsys):
     assert "timestamp" in payload
     assert payload["level"] == "INFO"
     assert "trace_id" in payload
+    assert "request_id" in payload
 
 
 def test_trace_id_defaults_to_placeholder():
@@ -64,6 +66,7 @@ def test_trace_id_filter_reflects_current_contextvar_value():
         )
         TraceIdFilter().filter(record)
         assert record.trace_id == "abc-123"
+        assert record.request_id == "abc-123"
         assert record.service == "photo-service"
     finally:
         trace_id_var.reset(token)
@@ -83,3 +86,4 @@ def test_log_output_reflects_trace_id_var_when_set(capsys):
     line = captured.out.strip().splitlines()[-1]
     payload = json.loads(line)
     assert payload["trace_id"] == "trace-xyz"
+    assert payload["request_id"] == "trace-xyz"

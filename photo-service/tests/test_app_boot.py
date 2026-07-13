@@ -51,7 +51,7 @@ class TestAppAssembly:
         # entry in `app.routes` (no direct `.path` attribute) - so we assert
         # on the router object itself rather than trying to enumerate paths
         # through `app.routes`.
-        assert photos_router_module.router.prefix == "/api/v1/photos"
+        assert photos_router_module.router.prefix == "/v1/photos"
         included = [r for r in app.routes if type(r).__name__ == "_IncludedRouter"]
         assert included, "photos router must be included in the app"
 
@@ -69,10 +69,14 @@ class TestAppAssembly:
         assert "/healthz" in schema["paths"]
         assert "/readyz" in schema["paths"]
 
-    def test_no_upload_routes_exist_yet(self):
-        """Bootstrap scope: no POST /api/v1/photos endpoint should exist."""
+    def test_upload_routes_exist(self):
+        """TASK-001: POST/GET /v1/photos endpoints must be registered."""
         schema = app.openapi()
-        assert "/api/v1/photos" not in schema["paths"]
+        assert "/v1/photos" in schema["paths"]
+        assert "post" in schema["paths"]["/v1/photos"]
+        assert "get" in schema["paths"]["/v1/photos"]
+        assert "/v1/photos/{photo_id}" in schema["paths"]
+        assert "/v1/photos/{photo_id}/content" in schema["paths"]
 
 
 class TestReadyz:
