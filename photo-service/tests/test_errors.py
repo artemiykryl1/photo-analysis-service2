@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.errors import (
     AppError,
+    BatchSizeError,
     ConflictError,
     NotFoundError,
     PayloadTooLargeError,
@@ -69,6 +70,7 @@ class TestStatusCodeMapping:
             (ConflictError(), 409, "CONFLICT"),
             (PayloadTooLargeError(), 413, "PAYLOAD_TOO_LARGE"),
             (UnsupportedMediaTypeError(), 415, "UNSUPPORTED_MEDIA_TYPE"),
+            (BatchSizeError(), 400, "INVALID_BATCH_SIZE"),
             (AppError(), 500, "INTERNAL_ERROR"),
         ],
     )
@@ -132,6 +134,7 @@ class TestExceptionHierarchy:
             ConflictError,
             PayloadTooLargeError,
             UnsupportedMediaTypeError,
+            BatchSizeError,
         ],
     )
     def test_all_domain_errors_subclass_app_error(self, exc_cls):

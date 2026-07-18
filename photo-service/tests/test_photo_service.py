@@ -297,6 +297,7 @@ class TestGetPhoto:
         found.photo_id = photo_id
         found.filename = "cat.jpg"
         found.status = PhotoStatus.processing
+        found.analysis = None  # status=processing -> not analyzed yet
 
         repository = AsyncMock()
         repository.get_by_id.return_value = found
@@ -307,6 +308,7 @@ class TestGetPhoto:
         assert result.id == str(photo_id)
         assert result.filename == "cat.jpg"
         assert result.status == "processing"
+        assert result.analysis is None
 
     async def test_raises_not_found_when_missing(self):
         repository = AsyncMock()
@@ -328,8 +330,12 @@ class TestListPhotos:
         assert result == []
 
     async def test_maps_each_orm_row_to_photo_response(self):
-        p1 = MagicMock(photo_id=uuid.uuid4(), filename="a.jpg", status=PhotoStatus.pending)
-        p2 = MagicMock(photo_id=uuid.uuid4(), filename="b.png", status=PhotoStatus.done)
+        p1 = MagicMock(
+            photo_id=uuid.uuid4(), filename="a.jpg", status=PhotoStatus.pending, analysis=None
+        )
+        p2 = MagicMock(
+            photo_id=uuid.uuid4(), filename="b.png", status=PhotoStatus.done, analysis=None
+        )
         repository = AsyncMock()
         repository.list.return_value = [p1, p2]
         service = PhotoService(repository=repository, storage=MagicMock())

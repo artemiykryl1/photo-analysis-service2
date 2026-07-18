@@ -198,7 +198,12 @@ class TestGetPhotoStatus:
         response = await client.get(f"/v1/photos/{photo_id}")
 
         assert response.status_code == 200
-        assert response.json() == {"id": str(photo_id), "filename": "a.jpg", "status": "pending"}
+        assert response.json() == {
+            "id": str(photo_id),
+            "filename": "a.jpg",
+            "status": "pending",
+            "analysis": None,
+        }
 
     async def test_missing_photo_returns_404_unified_body(self, app_client):
         client, fake_service = app_client

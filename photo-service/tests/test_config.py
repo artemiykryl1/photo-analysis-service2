@@ -115,3 +115,67 @@ class TestGetSettingsCaching:
         first = get_settings()
         second = get_settings()
         assert first is second
+
+
+class TestTaskO02Defaults:
+    """tasks/TASK-002/20_design.md §10.1 - new Kafka/analyzer/worker/outbox
+    fields must have compose-friendly defaults so `docker compose up`
+    works without a `.env` file."""
+
+    def test_kafka_defaults(self, monkeypatch):
+        for key in (
+            "KAFKA_BOOTSTRAP_SERVERS",
+            "KAFKA_TOPIC_ANALYSIS_REQUESTED",
+            "KAFKA_CONSUMER_GROUP",
+            "KAFKA_PUBLISH_TIMEOUT_SECONDS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        assert settings.KAFKA_BOOTSTRAP_SERVERS == "kafka:9092"
+        assert settings.KAFKA_TOPIC_ANALYSIS_REQUESTED == "photo.analysis.requested"
+        assert settings.KAFKA_CONSUMER_GROUP == "photo-analysis-workers"
+        assert settings.KAFKA_PUBLISH_TIMEOUT_SECONDS == 10.0
+
+    def test_analyzer_grpc_defaults(self, monkeypatch):
+        for key in ("ANALYZER_GRPC_ADDR", "ANALYZER_GRPC_TIMEOUT"):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        assert settings.ANALYZER_GRPC_ADDR == "analyzer-stub:50051"
+        assert settings.ANALYZER_GRPC_TIMEOUT == 30.0
+
+    def test_worker_retry_defaults(self, monkeypatch):
+        for key in ("WORKER_MAX_ATTEMPTS", "RETRY_BACKOFF_BASE_SECONDS"):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        assert settings.WORKER_MAX_ATTEMPTS == 3
+        assert settings.RETRY_BACKOFF_BASE_SECONDS == 1.0
+
+    def test_outbox_and_metrics_defaults(self, monkeypatch):
+        for key in ("OUTBOX_POLL_INTERVAL_SECONDS", "OUTBOX_BATCH_SIZE", "WORKER_METRICS_PORT"):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        assert settings.OUTBOX_POLL_INTERVAL_SECONDS == 2.0
+        assert settings.OUTBOX_BATCH_SIZE == 100
+        assert settings.WORKER_METRICS_PORT == 8001
+
+    def test_kafka_and_worker_settings_overridden_by_env(self, monkeypatch):
+        settings = _settings_from_env(
+            monkeypatch,
+            KAFKA_BOOTSTRAP_SERVERS="custom-kafka:9092",
+            ANALYZER_GRPC_ADDR="custom-analyzer:50051",
+            WORKER_MAX_ATTEMPTS="5",
+            OUTBOX_POLL_INTERVAL_SECONDS="0.5",
+        )
+
+        assert settings.KAFKA_BOOTSTRAP_SERVERS == "custom-kafka:9092"
+        assert settings.ANALYZER_GRPC_ADDR == "custom-analyzer:50051"
+        assert settings.WORKER_MAX_ATTEMPTS == 5
+        assert settings.OUTBOX_POLL_INTERVAL_SECONDS == 0.5

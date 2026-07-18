@@ -1,0 +1,15 @@
+# TASK-002 (tasks/TASK-002/20_design.md §9.1): scrapes the API's RED +
+# domain metrics (port 8000, /metrics) and the worker's analysis-pipeline
+# metrics (port 8001, /metrics). Mounted read-only into the `prometheus`
+# service in docker-compose.yml.
+global:
+  scrape_interval: 10s
+
+scrape_configs:
+  - job_name: photo-api
+    static_configs:
+      - targets: ["api:8000"]
+
+  - job_name: photo-worker
+    static_configs:
+      - targets: ["worker:8001"]

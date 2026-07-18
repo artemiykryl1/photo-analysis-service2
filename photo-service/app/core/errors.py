@@ -80,6 +80,15 @@ class UnsupportedMediaTypeError(AppError):
     message = "Unsupported media type"
 
 
+class BatchSizeError(AppError):
+    """Raised when `POST /v1/photos/batch` receives fewer than 2 or more
+    than 10 files (tasks/TASK-002/20_design.md §3.4, §12 step 19)."""
+
+    error_code = "INVALID_BATCH_SIZE"
+    http_status = 400
+    message = "Batch must contain between 2 and 10 files"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Register handlers that convert any exception into ErrorResponse JSON.
 

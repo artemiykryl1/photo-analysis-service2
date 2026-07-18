@@ -33,6 +33,27 @@ class Settings(BaseSettings):
     MINIO_BUCKET: str = "photos"
     MINIO_SECURE: bool = False  # http locally
 
+    # Kafka (TASK-002: tasks/TASK-002/20_design.md §10.1)
+    KAFKA_BOOTSTRAP_SERVERS: str = "kafka:9092"
+    KAFKA_TOPIC_ANALYSIS_REQUESTED: str = "photo.analysis.requested"
+    KAFKA_CONSUMER_GROUP: str = "photo-analysis-workers"
+    KAFKA_PUBLISH_TIMEOUT_SECONDS: float = 10.0
+
+    # Analyzer gRPC
+    ANALYZER_GRPC_ADDR: str = "analyzer-stub:50051"
+    ANALYZER_GRPC_TIMEOUT: float = 30.0
+
+    # Worker retry/backoff (constitution.md §2.4)
+    WORKER_MAX_ATTEMPTS: int = 3
+    RETRY_BACKOFF_BASE_SECONDS: float = 1.0  # backoff sequence: 1,2,4s
+
+    # Metrics
+    WORKER_METRICS_PORT: int = 8001
+
+    # Outbox publisher (upload works even when Kafka is down)
+    OUTBOX_POLL_INTERVAL_SECONDS: float = 2.0
+    OUTBOX_BATCH_SIZE: int = 100
+
 
 @lru_cache
 def get_settings() -> Settings:

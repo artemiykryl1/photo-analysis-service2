@@ -1,4 +1,4 @@
-"""Integration test for the v001 migration against a real, ephemeral
+"""Integration test for the v001+v002 migrations against a real, ephemeral
 PostgreSQL instance (testcontainers).
 
 This closes the test gap documented in tasks/TASK-000/60_debug.md: the
@@ -8,7 +8,11 @@ actually *executing* the migration's DDL against a real Postgres engine.
 `alembic upgrade head --sql` (offline mode) only prints SQL without
 running it, and every other test in this suite mocks the DB entirely -
 neither would have caught that regression. This is the only place a real
-`alembic upgrade head` / `downgrade base` is executed.
+`alembic upgrade head` / `downgrade` is executed.
+
+TASK-002 (tasks/TASK-002/20_design.md §13.1): extended to also exercise
+the v002 revision (`analysis_results`, `batches`, and the seven new
+`photos` columns) and the full `v002 -> v001 -> base` downgrade chain.
 
 Requires a running Docker daemon (spins up a disposable
 `postgres:16-alpine` container via testcontainers). Skipped automatically
@@ -69,19 +73,21 @@ def _run_alembic(args: list[str], database_url: str) -> subprocess.CompletedProc
     )
 
 
-async def _inspect_schema_present(dsn: str) -> tuple:
+async def _inspect_v002_schema_present(dsn: str) -> dict:
+    """Inspect the full post-`upgrade head` (v002) schema: extended
+    `photos`, `analysis_results`, `batches`."""
     import asyncpg
 
     conn = await asyncpg.connect(dsn)
     try:
-        table_exists = await conn.fetchval(
+        photos_exists = await conn.fetchval(
             "select exists (select 1 from information_schema.tables "
             "where table_name = 'photos')"
         )
-        columns = await conn.fetch(
+        photos_columns = await conn.fetch(
             "select column_name from information_schema.columns where table_name = 'photos'"
         )
-        column_names = {row["column_name"] for row in columns}
+        photos_column_names = {row["column_name"] for row in photos_columns}
 
         unique_constraint_count = await conn.fetchval(
             "select count(*) from information_schema.table_constraints "
@@ -96,7 +102,82 @@ async def _inspect_schema_present(dsn: str) -> tuple:
         )
         enum_labels = [row["enumlabel"] for row in enum_rows]
 
-        return table_exists, column_names, unique_constraint_count, enum_labels
+        analysis_results_exists = await conn.fetchval(
+            "select exists (select 1 from information_schema.tables "
+            "where table_name = 'analysis_results')"
+        )
+        analysis_results_columns = await conn.fetch(
+            "select column_name from information_schema.columns "
+            "where table_name = 'analysis_results'"
+        )
+        analysis_results_column_names = {
+            row["column_name"] for row in analysis_results_columns
+        }
+
+        batches_exists = await conn.fetchval(
+            "select exists (select 1 from information_schema.tables "
+            "where table_name = 'batches')"
+        )
+        batches_columns = await conn.fetch(
+            "select column_name from information_schema.columns where table_name = 'batches'"
+        )
+        batches_column_names = {row["column_name"] for row in batches_columns}
+
+        index_rows = await conn.fetch(
+            "select indexname from pg_indexes where tablename in ('photos', 'batches')"
+        )
+        index_names = {row["indexname"] for row in index_rows}
+
+        check_rows = await conn.fetch(
+            "select constraint_name from information_schema.table_constraints "
+            "where table_name in ('photos', 'batches') and constraint_type = 'CHECK' "
+            "and constraint_name in ('ck_photos_publish_status', 'ck_batches_status')"
+        )
+        check_constraint_names = {row["constraint_name"] for row in check_rows}
+
+        return {
+            "photos_exists": photos_exists,
+            "photos_columns": photos_column_names,
+            "unique_constraint_count": unique_constraint_count,
+            "enum_labels": enum_labels,
+            "analysis_results_exists": analysis_results_exists,
+            "analysis_results_columns": analysis_results_column_names,
+            "batches_exists": batches_exists,
+            "batches_columns": batches_column_names,
+            "indexes": index_names,
+            "check_constraints": check_constraint_names,
+        }
+    finally:
+        await conn.close()
+
+
+async def _inspect_photos_columns(dsn: str) -> set:
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        columns = await conn.fetch(
+            "select column_name from information_schema.columns where table_name = 'photos'"
+        )
+        return {row["column_name"] for row in columns}
+    finally:
+        await conn.close()
+
+
+async def _inspect_v002_tables_exist(dsn: str) -> tuple:
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        analysis_results_exists = await conn.fetchval(
+            "select exists (select 1 from information_schema.tables "
+            "where table_name = 'analysis_results')"
+        )
+        batches_exists = await conn.fetchval(
+            "select exists (select 1 from information_schema.tables "
+            "where table_name = 'batches')"
+        )
+        return analysis_results_exists, batches_exists
     finally:
         await conn.close()
 
@@ -118,8 +199,8 @@ async def _inspect_schema_absent(dsn: str) -> tuple:
         await conn.close()
 
 
-class TestV001MigrationAgainstRealPostgres:
-    def test_upgrade_head_creates_schema_exactly_once_and_downgrade_is_clean(self):
+class TestMigrationsAgainstRealPostgres:
+    def test_upgrade_head_creates_v002_schema_and_downgrade_chain_is_clean(self):
         from testcontainers.postgres import PostgresContainer
 
         with PostgresContainer("postgres:16-alpine") as postgres:
@@ -135,12 +216,70 @@ class TestV001MigrationAgainstRealPostgres:
                 f"stdout={upgrade.stdout}\nstderr={upgrade.stderr}"
             )
 
-            table_exists, column_names, unique_count, enum_labels = asyncio.run(
-                _inspect_schema_present(raw_dsn)
+            schema = asyncio.run(_inspect_v002_schema_present(raw_dsn))
+
+            assert schema["photos_exists"] is True
+            assert schema["photos_columns"] == {
+                # v001
+                "photo_id",
+                "filename",
+                "object_key",
+                "user_id",
+                "created_at",
+                "status",
+                # v002 (tasks/TASK-002/20_design.md §2.3)
+                "attempts",
+                "last_error_code",
+                "last_error_message",
+                "publish_status",
+                "published_at",
+                "trace_id",
+                "batch_id",
+            }
+            assert schema["unique_constraint_count"] == 1, (
+                "object_key must have exactly one UNIQUE constraint"
+            )
+            assert schema["enum_labels"] == ["pending", "processing", "done", "failed"]
+
+            assert schema["analysis_results_exists"] is True
+            assert schema["analysis_results_columns"] == {
+                "photo_id",
+                "faces_count",
+                "is_blurred",
+                "blur_score",
+                "perceptual_hash",
+                "created_at",
+            }
+
+            assert schema["batches_exists"] is True
+            assert schema["batches_columns"] == {
+                "batch_id",
+                "status",
+                "best_photo_id",
+                "created_at",
+            }
+
+            assert {
+                "ix_photos_batch_id",
+                "ix_photos_status",
+                "ix_photos_publish_status",
+                "ix_batches_created_at",
+            } <= schema["indexes"]
+
+            assert schema["check_constraints"] == {
+                "ck_photos_publish_status",
+                "ck_batches_status",
+            }
+
+            # downgrade v002 -> v001: new tables/columns gone, v001 shape restored
+            downgrade_to_v001 = _run_alembic(["downgrade", "v001"], alembic_url)
+            assert downgrade_to_v001.returncode == 0, (
+                f"alembic downgrade v002 -> v001 must succeed cleanly:\n"
+                f"stdout={downgrade_to_v001.stdout}\nstderr={downgrade_to_v001.stderr}"
             )
 
-            assert table_exists is True
-            assert column_names == {
+            photos_columns_after_v001 = asyncio.run(_inspect_photos_columns(raw_dsn))
+            assert photos_columns_after_v001 == {
                 "photo_id",
                 "filename",
                 "object_key",
@@ -148,13 +287,19 @@ class TestV001MigrationAgainstRealPostgres:
                 "created_at",
                 "status",
             }
-            assert unique_count == 1, "object_key must have exactly one UNIQUE constraint"
-            assert enum_labels == ["pending", "processing", "done", "failed"]
+            analysis_results_exists, batches_exist = asyncio.run(
+                _inspect_v002_tables_exist(raw_dsn)
+            )
+            assert analysis_results_exists is False, (
+                "downgrade to v001 must drop analysis_results"
+            )
+            assert batches_exist is False, "downgrade to v001 must drop batches"
 
-            downgrade = _run_alembic(["downgrade", "base"], alembic_url)
-            assert downgrade.returncode == 0, (
+            # downgrade v001 -> base: full teardown (same contract as TASK-001)
+            downgrade_to_base = _run_alembic(["downgrade", "base"], alembic_url)
+            assert downgrade_to_base.returncode == 0, (
                 f"alembic downgrade base must succeed cleanly:\n"
-                f"stdout={downgrade.stdout}\nstderr={downgrade.stderr}"
+                f"stdout={downgrade_to_base.stdout}\nstderr={downgrade_to_base.stderr}"
             )
 
             table_exists_after, enum_exists_after = asyncio.run(
