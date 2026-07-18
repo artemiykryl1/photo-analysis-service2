@@ -106,7 +106,13 @@ services:
       # Kafka is unhealthy/unreachable for longer than that.
       kafka:
         condition: service_healthy
-    command: sh -c "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # Review fix (tasks/TASK-002/40_review-1.md M7): `exec` before the
+    # final command replaces the `sh` wrapper (PID 1 in the container)
+    # with uvicorn, so SIGTERM from `docker compose stop` reaches uvicorn
+    # directly instead of being swallowed by `sh -c` - required for
+    # uvicorn's own graceful shutdown (drain in-flight requests) instead
+    # of a SIGKILL once the stop timeout elapses.
+    command: sh -c "uv run alembic upgrade head && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   # TASK-002 (design §5, §10.3): same image as `api`, different command -
   # consumes photo.analysis.requested and calls analyzer-stub over gRPC.
@@ -142,7 +148,14 @@ services:
       # `alembic upgrade head` on a fresh database.
       api:
         condition: service_started
-    command: sh -c "uv run python -m app.worker.main"
+    # Review fix (tasks/TASK-002/40_review-1.md M7): `exec` replaces the
+    # `sh` wrapper (PID 1 in the container) with the python process, so
+    # SIGTERM from `docker compose stop` reaches app/worker/main.py's
+    # signal handlers directly - without it, `sh -c` stays PID 1, does
+    # not forward SIGTERM to its child, and the worker gets SIGKILLed
+    # after the stop timeout instead of finishing its in-flight message
+    # and committing the offset (graceful shutdown, design §5.6).
+    command: sh -c "exec uv run python -m app.worker.main"
 
   # TASK-002 (design §9.1): scrapes api:8000/metrics + worker:8001/metrics.
   prometheus:

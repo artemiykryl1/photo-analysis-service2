@@ -5,13 +5,27 @@ cycle; the actual claim -> gRPC -> persist sequence lives in
 `app.services.analysis_processor.AnalysisProcessor` (kept separate so it
 can be unit-tested without a running Kafka broker).
 
-Offset commit timing (constitution.md §2.4 / design §5.2, §5.6): a message
-is only ever committed AFTER `AnalysisProcessor.process()` has returned -
+Offset commit timing (constitution.md §2.4 / design §5.2, §5.6): the Kafka
+offset is only committed AFTER `AnalysisProcessor.process()` has returned -
 whether it reached a terminal `done`/`failed` write or (rare) raised an
-unexpected exception. This is deliberately at-least-once: a hard process
-crash mid-message leaves the offset uncommitted and Kafka will redeliver
-it (the atomic `pending->processing` claim makes redelivery of an
-already-terminal photo a safe no-op - see `PhotoRepository.claim_for_processing`).
+unexpected exception. This is at-least-once *at the message-delivery
+level*: a hard process crash mid-message leaves the offset uncommitted,
+so Kafka will redeliver the message.
+
+Redelivery is safe as a **dedup** mechanism, not as automatic recovery.
+The atomic `pending->processing` claim (`PhotoRepository.claim_for_processing`)
+commits early, inside `process()` (design §5.3 step 1) - well before the
+offset commit here. Its `WHERE status='pending'` predicate returns 0 rows
+- and the redelivered message is skipped - for a photo that is already
+`done`/`failed` (already-terminal) OR already `processing` (already
+claimed by a previous delivery), so the same photo is never analyzed
+twice. It does **not** resurrect a photo whose worker died AFTER the
+claim commit (status already `processing`) but BEFORE the terminal
+write: redelivery of that message also finds `status='processing'`,
+claims 0 rows, and is skipped - the photo is left stuck in `processing`
+forever. This is a known, accepted gap in TASK-002 (no reaper yet); an
+automatic reaper for photos stuck in `processing` is planned for
+TASK-003.
 
 Uses `consumer.getone()` in a polling loop (not `async for message in
 consumer`) so the loop can check `stop_event` between messages and exit

@@ -228,3 +228,21 @@ curl -s http://localhost:8001/metrics | grep photo_analysis
 - Тестов на новые ветки (poison-pill без `photo_id`/`object_key`, `ensure_started` retry-семантику, `BATCH_MAX_TOTAL_BYTES`, тай-брейк по `photo_id`) в этом заходе не добавлено — по вводным оркестратора «правки без расширения скоупа» и по общему конвейеру (test-writer вызывается после APPROVE обоих ревьюеров).
 
 ## Правки по ревью 1 внесены, готово к повторному ревью.
+
+---
+
+## Пост-ревью правки (живой ревьюер воркшопа, после PR #5)
+
+Две точечные правки по замечаниям ревьюера (agent-coder внёс код, гейты прогнаны оркестратором — агент прерван на этапе отчёта инфраструктурным сбоем API).
+
+**FIX-1 (docker-compose.yml, замечание M7 reviewer-1) — проброс SIGTERM.**
+`sh -c "..."` делает шелл PID 1, который не пробрасывает SIGTERM дочернему процессу → graceful shutdown не срабатывает, контейнер убивается по таймауту (SIGKILL). Фикс: `exec` перед целевой командой, чтобы процесс стал эффективным PID 1.
+- worker: `command: sh -c "exec uv run python -m app.worker.main"`
+- api: `command: sh -c "uv run alembic upgrade head && exec uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"`
+
+**FIX-2 (app/worker/consumer.py) — комментарий приведён в соответствие с поведением.**
+Прежний docstring обещал, что передоставка Kafka «безопасно всё починит». Уточнено: offset коммитится после process() (at-least-once на доставке); передоставка безопасна как дедуп (уже terminal/processing фото повторно не обрабатывается, claim=0 → skip), но НЕ воскрешает фото, чей воркер умер между захватом processing и терминалом — оно остаётся в processing (известный пробел, reaper в TASK-003). Логика кода не менялась.
+
+**Гейты:** ruff clean, 367 passed / 1 integration skip, `docker compose config -q` валиден.
+
+## Пост-ревью правки внесены.
