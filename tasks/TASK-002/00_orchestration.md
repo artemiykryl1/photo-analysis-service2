@@ -1,6 +1,6 @@
 # TASK-002 — Асинхронный конвейер анализа + батчи + наблюдаемость
 
-**Статус:** in_progress
+**Статус:** ✅ DONE — PR #5 опубликован (https://github.com/artemiykryl1/photo-analysis-service2/pull/5), ветка feat/task-002-async-pipeline → main, ожидает мёржа пользователем. Все гейты пройдены: 2×APPROVE, 367 passed/98% cov, живой прогon DoD Воркшопа 3.
 **Цель:** закрыть DoD Воркшопа 3 (Kafka → worker → analyzer-stub → done/failed, метрики Prometheus/Grafana) + батчевая загрузка с выбором лучшего кадра.
 **Спека:** `specs/feature-upload/tasks.md`, раздел TASK-002 (зафиксированные решения обязательны).
 **База:** main после мёржа PR #4 (TASK-001): рабочий API /v1/photos, PostgreSQL+MinIO, миграция v001, protos/analyzer.proto.
@@ -28,7 +28,7 @@
 | 6 | reviewer-1 + reviewer-2 (re-review) | 40/41 | ✅✅ ОБА APPROVE — reviewer-1 (opus) B1 закрыт, reviewer-2 (haiku) 3 BLK закрыты. ГЕЙТ РЕВЬЮ ПРОЙДЕН |
 | 7 | test-writer | 50_tests.md + тесты | ✅ done — 367 passed / 1 integration skip, coverage 98% app/, ruff clean, багов нет |
 | 8 | test-debugger | 60_debug.md | ✅ done — фикс `from __future__ import annotations` в photo_repository.py; подтверждён на 3.12 (api+worker Up, /metrics 200); 367 passed |
-| 9 | pr-publisher | 70_pr.md | ▶ запущен — разрешение пользователя ПОЛУЧЕНО, ветка feat/task-002-async-pipeline → main |
+| 9 | pr-publisher | 70_pr.md | ✅ done — PR #5 открыт (feat/task-002-async-pipeline → main), 64 файла |
 
 ## Живой прогон (docker compose, 8 контейнеров) — ✅ ПРОЙДЕН
 - Одиночное фото: POST → 202 pending → worker сам довёл до done с analysis (faces/blur/hash).
