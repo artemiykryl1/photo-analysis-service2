@@ -178,6 +178,18 @@ class PhotoRepository:
             .values(publish_status="sent", published_at=datetime.now(timezone.utc))
         )
 
+    async def get_batch_id(self, session: AsyncSession, photo_id: uuid.UUID) -> uuid.UUID | None:
+        """`SELECT batch_id FROM photos WHERE photo_id=:id` - used by the
+        worker (`AnalysisProcessor._maybe_complete_batch`, design §F3) to
+        decide whether a just-terminated photo belongs to a batch that may
+        now be completable. Returns `None` both when the photo has no
+        batch (single-photo upload - the common case, zero extra queries
+        beyond this one) and when the photo id itself doesn't exist."""
+        result = await session.execute(
+            select(Photo.batch_id).where(Photo.photo_id == photo_id)
+        )
+        return result.scalar_one_or_none()
+
     async def count_pending(self, session: AsyncSession) -> int:
         """`SELECT count(*) WHERE status='pending'` - backs the
         `photos_pending` gauge, refreshed on every `/metrics` scrape

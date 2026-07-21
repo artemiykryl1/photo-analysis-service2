@@ -24,6 +24,7 @@ from app.core.logging import setup_logging
 from app.db.session import engine
 from app.integrations.analyzer_client import AnalyzerGrpcClient
 from app.repositories.analysis_result_repository import AnalysisResultRepository
+from app.repositories.batch_repository import BatchRepository
 from app.repositories.photo_repository import PhotoRepository
 from app.services.analysis_processor import AnalysisProcessor
 from app.worker.consumer import consume_loop
@@ -61,6 +62,7 @@ async def _run() -> None:
         analysis_repository=AnalysisResultRepository(),
         analyzer=analyzer,
         settings=settings,
+        batch_repository=BatchRepository(),
     )
 
     consumer = AIOKafkaConsumer(

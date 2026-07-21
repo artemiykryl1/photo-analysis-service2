@@ -18,7 +18,6 @@ the result is fully deterministic even on a complete tie of every other
 field, instead of depending on `batch.photos` iteration order.
 """
 
-import logging
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,9 +26,7 @@ from app.core.errors import NotFoundError
 from app.db.models import Photo, PhotoStatus
 from app.repositories.batch_repository import BatchRepository
 from app.schemas.photos import BatchPhotoDetail, BatchResponse
-from app.services.photo_service import _analysis_response
-
-logger = logging.getLogger(__name__)
+from app.services.mappers import analysis_to_response
 
 _TERMINAL_STATUSES = frozenset({PhotoStatus.done, PhotoStatus.failed})
 
@@ -62,9 +59,24 @@ class BatchService:
         self._repository = batch_repository
 
     async def get_batch(self, session: AsyncSession, batch_id: uuid.UUID) -> BatchResponse:
-        """Fetch a batch, derive its aggregate `status`/`best_photo_id`
-        from the current state of its photos, and (on first observed
-        completion) persist that computation (design §11 risk #5, #11)."""
+        """Fetch a batch and derive its aggregate `status`/`best_photo_id`
+        from the current state of its photos - strictly read-only.
+
+        TASK-002.1 (tasks/TASK-002.1/20_design.md F3): this method used to
+        write the computed `completed`/`best_photo_id` through to the
+        `batches` row on the first GET that observed all photos terminal.
+        That made a supposedly-safe GET perform an `UPDATE` + `commit`
+        (concurrent GETs racing each other, retried/duplicated proxy
+        requests writing to the DB, and the batch never completing at all
+        if nobody happened to call GET). The actual persistence of
+        `completed`/`best_photo_id` now happens in the worker
+        (`AnalysisProcessor._maybe_complete_batch`, via the atomic
+        `BatchRepository.try_complete`) right after each photo's terminal
+        write. This method only *computes* the same values for display -
+        it does not touch `batch.status`/`batch.best_photo_id` in the DB,
+        so the response looks identical to a client regardless of whether
+        the worker has already persisted the completion or not.
+        """
         batch = await self._repository.get_by_id(session, batch_id)
         if batch is None:
             raise NotFoundError("Batch not found")
@@ -74,14 +86,7 @@ class BatchService:
 
         if all_terminal:
             status = "completed"
-            best_photo_id = select_best_photo(photos)
-            if batch.status != "completed":
-                await self._repository.mark_completed(session, batch.batch_id, best_photo_id)
-                await session.commit()
-                logger.info(
-                    "batch completed",
-                    extra={"batch_id": str(batch.batch_id), "best_photo_id": str(best_photo_id)},
-                )
+            best_photo_id = select_best_photo(photos)  # display-only, never persisted here
         else:
             status = "processing"
             best_photo_id = None
@@ -94,7 +99,7 @@ class BatchService:
                     photo_id=str(p.photo_id),
                     filename=p.filename,
                     status=p.status.value,
-                    analysis=_analysis_response(p.analysis),
+                    analysis=analysis_to_response(p.analysis),
                 )
                 for p in photos
             ],

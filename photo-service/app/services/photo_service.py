@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import (
     BatchSizeError,
+    DatabaseUnavailable,
     NotFoundError,
     PayloadTooLargeError,
     StorageUnavailable,
@@ -39,18 +40,18 @@ from app.core.errors import (
     ValidationError,
 )
 from app.core.logging import trace_id_var
-from app.db.models import AnalysisResult, Batch, Photo, PhotoStatus
-from app.integrations.metrics import photos_uploaded_total, storage_upload_errors_total
+from app.db.models import Batch, Photo, PhotoStatus
+from app.integrations.metrics_api import photos_uploaded_total, storage_upload_errors_total
 from app.integrations.storage import ObjectStorage
 from app.repositories.batch_repository import BatchRepository
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photos import (
-    AnalysisResultResponse,
     BatchAcceptedResponse,
     BatchPhotoItem,
     PhotoResponse,
     UploadPhotoResponse,
 )
+from app.services.mappers import analysis_to_response
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,21 @@ MAX_BATCH_SIZE = 10
 # capped at MAX_FILE_SIZE_BYTES individually, but nothing stopped a batch of
 # up to MAX_BATCH_SIZE files from holding all of them in memory at once
 # (up to 10 x 50MB = 500MB per request). Cap the summed size explicitly.
-BATCH_MAX_TOTAL_BYTES = MAX_BATCH_SIZE * MAX_FILE_SIZE_BYTES  # 500 MB
+#
+# TASK-002.1 review-1 fix (M2/BLK-2): this MUST be an independent, deliberate
+# RAM ceiling per batch request - NOT derived from `MAX_BATCH_SIZE *
+# MAX_FILE_SIZE_BYTES`. That product is exactly the maximum a legitimate
+# batch can already reach (10 x 50MB = 500MB), so a strict `total >
+# BATCH_MAX_TOTAL_BYTES` check against it can never trigger: a batch of
+# 10 files at 50MB each sums to exactly 500MB, which does not exceed 500MB.
+# The guard would be dead code on production constants, silently allowing
+# the full 500MB-per-request memory usage the review-2 fix was written to
+# prevent. 150 MB is a deliberate, independent ceiling (comfortably above a
+# realistic "a few normal photos" batch, well below the 500MB the per-file/
+# count caps alone would allow) chosen so the running-total check in
+# `app.api.uploads.read_batch_files` is actually reachable on production
+# constants (e.g. 4 files x 50MB = 200MB > 150MB is correctly rejected).
+BATCH_MAX_TOTAL_BYTES = 150 * 1024 * 1024  # 150 MB - independent RAM ceiling per batch request
 
 _JPEG_MAGIC = b"\xff\xd8\xff"
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -74,19 +89,6 @@ _EXT_TO_MIME = {
     "jpeg": "image/jpeg",
     "png": "image/png",
 }
-
-
-def _analysis_response(analysis: AnalysisResult | None) -> AnalysisResultResponse | None:
-    """Map the ORM `AnalysisResult` (if any) to its Pydantic response
-    shape. `None` until the photo reaches `status=done` (design §3.3)."""
-    if analysis is None:
-        return None
-    return AnalysisResultResponse(
-        faces_count=analysis.faces_count,
-        is_blurred=analysis.is_blurred,
-        blur_score=analysis.blur_score,
-        perceptual_hash=analysis.perceptual_hash,
-    )
 
 
 class PhotoService:
@@ -121,6 +123,41 @@ class PhotoService:
     def _ext_to_mime(object_key: str) -> str:
         ext = object_key.rsplit(".", 1)[-1].lower()
         return _EXT_TO_MIME.get(ext, "application/octet-stream")
+
+    @staticmethod
+    async def _safe_rollback(session: AsyncSession, context: dict[str, str]) -> None:
+        """Best-effort `session.rollback()`.
+
+        TASK-002.1 review-1 m2: `rollback()` itself can raise (e.g. the
+        connection was already invalidated by a failed commit, a realistic
+        case for asyncpg). Swallow that failure and log a warning - a failed
+        rollback must never skip the compensating MinIO cleanup below it, nor
+        propagate as an unhandled 500 in place of the intended 503.
+        """
+        try:
+            await session.rollback()
+        except Exception:  # noqa: BLE001 - rollback failure must not block compensation
+            logger.warning("rollback failed after earlier failure", extra=context)
+
+    async def _delete_saved_objects(
+        self, object_keys: list[str], context: dict[str, str]
+    ) -> None:
+        """Best-effort delete of objects already saved to MinIO for a
+        transaction that is being compensated (rolled back).
+
+        TASK-002.1 review-1 m3: each deletion is isolated - one object
+        failing to delete must not stop the others from being attempted, and
+        none of these failures may mask the original exception the caller is
+        about to (re)raise.
+        """
+        for object_key in object_keys:
+            try:
+                await anyio.to_thread.run_sync(self._storage.delete_file, object_key)
+            except Exception:  # noqa: BLE001 - best-effort; must not mask the original failure
+                logger.warning(
+                    "failed to delete orphaned object after failure",
+                    extra={**context, "object_key": object_key},
+                )
 
     async def create_photo(
         self, session: AsyncSession, filename: str | None, data: bytes
@@ -163,7 +200,7 @@ class PhotoService:
                     self._storage.save_file, object_key, data, len(data), content_type
                 )
         except (StorageUnavailable, TimeoutError) as exc:
-            await session.rollback()
+            await self._safe_rollback(session, {"photo_id": str(photo_id)})
             storage_upload_errors_total.inc()
             logger.warning(
                 "MinIO unavailable on upload, rolled back",
@@ -175,7 +212,19 @@ class PhotoService:
             "stored in MinIO", extra={"photo_id": str(photo_id), "size": len(data)}
         )
 
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 - commit failed -> compensate and surface 503
+            await self._safe_rollback(session, {"photo_id": str(photo_id)})
+            await self._delete_saved_objects([object_key], {"photo_id": str(photo_id)})
+            logger.error(
+                "DB commit failed after MinIO save; compensated by deleting the object",
+                extra={"photo_id": str(photo_id)},
+            )
+            raise DatabaseUnavailable(
+                "Service temporarily unavailable", photo_id=str(photo_id)
+            ) from exc
+
         photos_uploaded_total.inc()
         logger.info("photo row committed", extra={"photo_id": str(photo_id)})
 
@@ -242,17 +291,30 @@ class PhotoService:
                 saved_object_keys.append(object_key)
                 photos.append(photo)
         except (StorageUnavailable, TimeoutError) as exc:
-            await session.rollback()
+            await self._safe_rollback(session, {"batch_id": str(batch.batch_id)})
             storage_upload_errors_total.inc()
             logger.warning(
                 "MinIO unavailable during batch upload, rolled back",
                 extra={"batch_id": str(batch.batch_id)},
             )
-            for object_key in saved_object_keys:
-                await anyio.to_thread.run_sync(self._storage.delete_file, object_key)
+            await self._delete_saved_objects(
+                saved_object_keys, {"batch_id": str(batch.batch_id)}
+            )
             raise StorageUnavailable("Storage is unreachable") from exc
 
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 - commit failed -> compensate and surface 503
+            await self._safe_rollback(session, {"batch_id": str(batch.batch_id)})
+            await self._delete_saved_objects(
+                saved_object_keys, {"batch_id": str(batch.batch_id)}
+            )
+            logger.error(
+                "DB commit failed after batch MinIO save; compensated by deleting objects",
+                extra={"batch_id": str(batch.batch_id), "photo_count": len(saved_object_keys)},
+            )
+            raise DatabaseUnavailable("Service temporarily unavailable") from exc
+
         photos_uploaded_total.inc(len(photos))
         logger.info(
             "batch committed",
@@ -274,7 +336,7 @@ class PhotoService:
             id=str(photo.photo_id),
             filename=photo.filename,
             status=photo.status.value,
-            analysis=_analysis_response(photo.analysis),
+            analysis=analysis_to_response(photo.analysis),
         )
 
     async def list_photos(
@@ -286,7 +348,7 @@ class PhotoService:
                 id=str(p.photo_id),
                 filename=p.filename,
                 status=p.status.value,
-                analysis=_analysis_response(p.analysis),
+                analysis=analysis_to_response(p.analysis),
             )
             for p in photos
         ]

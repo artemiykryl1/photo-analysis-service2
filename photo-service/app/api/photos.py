@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.uploads import read_capped_file
 from app.db.session import get_session
 from app.integrations.storage import ObjectStorage
 from app.repositories.photo_repository import PhotoRepository
@@ -55,7 +56,7 @@ async def upload_photo(
     service: PhotoService = Depends(get_photo_service),
     session: AsyncSession = Depends(get_session),
 ) -> UploadPhotoResponse:
-    data = await file.read()
+    data = await read_capped_file(file)
     return await service.create_photo(session, file.filename, data)
 
 

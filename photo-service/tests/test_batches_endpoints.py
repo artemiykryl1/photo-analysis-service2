@@ -20,6 +20,7 @@ from app.api.batches import get_batch_service
 from app.api.photos import get_photo_service
 from app.core.errors import (
     BatchSizeError,
+    DatabaseUnavailable,
     NotFoundError,
     PayloadTooLargeError,
     StorageUnavailable,
@@ -132,6 +133,10 @@ class TestUploadBatchErrorMapping:
             (PayloadTooLargeError(), 413, "PAYLOAD_TOO_LARGE"),
             (UnsupportedMediaTypeError(), 415, "UNSUPPORTED_MEDIA_TYPE"),
             (StorageUnavailable(), 503, "SERVICE_UNAVAILABLE"),
+            # TASK-002.1 F5: a commit failure after every file is already in
+            # MinIO surfaces as DatabaseUnavailable - same public
+            # error_code/status as StorageUnavailable (contract unchanged).
+            (DatabaseUnavailable(), 503, "SERVICE_UNAVAILABLE"),
         ],
     )
     async def test_error_returns_expected_status_and_unified_body(

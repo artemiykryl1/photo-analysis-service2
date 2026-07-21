@@ -8,9 +8,12 @@ module docstring in `app/services/batch_service.py`).
 
 `BatchService.get_batch` is exercised with a mocked `BatchRepository` (same
 style as `PhotoService` tests): 404 on missing batch, `processing` while any
-photo is non-terminal, `completed` + write-through `mark_completed` on first
-observed completion, and idempotency (no second write) once already
-`completed`.
+photo is non-terminal, `completed` + computed `best_photo_id` once all
+photos are terminal. TASK-002.1 (F3): `get_batch` is strictly read-only -
+it never calls `repository.try_complete` nor `session.commit`, regardless
+of whether the batch is freshly completed or already was; persisting the
+completion is now the worker's job (see `test_analysis_processor.py` /
+`test_batch_repository.py::TestTryComplete`).
 """
 
 import uuid
@@ -187,9 +190,14 @@ class TestGetBatch:
 
         assert result.status == "processing"
         assert result.best_photo_id is None
-        repository.mark_completed.assert_not_called()
+        repository.try_complete.assert_not_called()
 
     async def test_completed_status_with_best_photo_id_when_all_terminal(self):
+        """TASK-002.1 F3: `get_batch` is strictly read-only - it computes
+        `completed`/`best_photo_id` for display but must not write them
+        through (that now happens in the worker, see
+        `AnalysisProcessor._maybe_complete_batch` /
+        `BatchRepository.try_complete`)."""
         best = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.1, faces_count=3)
         worse = _photo(status=PhotoStatus.done, is_blurred=True, blur_score=0.9, faces_count=1)
         photos = [worse, best]
@@ -203,25 +211,28 @@ class TestGetBatch:
 
         assert result.status == "completed"
         assert result.best_photo_id == str(best.photo_id)
-        repository.mark_completed.assert_awaited_once_with(session, batch.batch_id, best.photo_id)
-        session.commit.assert_awaited_once()
+        repository.try_complete.assert_not_called()
+        session.commit.assert_not_called()
 
     async def test_completed_with_all_failed_yields_null_best_photo_id(self):
         photos = [_photo(status=PhotoStatus.failed), _photo(status=PhotoStatus.failed)]
         batch = _batch(photos)
         repository = AsyncMock()
         repository.get_by_id.return_value = batch
+        session = AsyncMock()
         service = BatchService(batch_repository=repository)
 
-        result = await service.get_batch(session=AsyncMock(), batch_id=batch.batch_id)
+        result = await service.get_batch(session=session, batch_id=batch.batch_id)
 
         assert result.status == "completed"
         assert result.best_photo_id is None
-        repository.mark_completed.assert_awaited_once()
+        repository.try_complete.assert_not_called()
+        session.commit.assert_not_called()
 
     async def test_already_completed_batch_does_not_write_through_again(self):
-        """Idempotency: a second GET after completion must not call
-        `mark_completed`/commit again (design §11 risk #11)."""
+        """Idempotency: a GET of an already-`completed` batch must not
+        write anything either - `get_batch` never writes, regardless of
+        the batch's current persisted status (design §11 risk #11, F3)."""
         best = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.1, faces_count=3)
         batch = _batch([best], status="completed")
         repository = AsyncMock()
@@ -233,7 +244,7 @@ class TestGetBatch:
 
         assert result.status == "completed"
         assert result.best_photo_id == str(best.photo_id)
-        repository.mark_completed.assert_not_called()
+        repository.try_complete.assert_not_called()
         session.commit.assert_not_called()
 
     async def test_empty_photos_list_is_treated_as_processing_not_completed(self):

@@ -35,16 +35,25 @@ class BatchRepository:
         )
         return result
 
-    async def mark_completed(
+    async def try_complete(
         self, session: AsyncSession, batch_id: uuid.UUID, best_photo_id: uuid.UUID | None
-    ) -> None:
-        """Write-through the computed `best_photo_id` once all photos in
-        the batch reach a terminal status (design §5, §11 risk #11).
-        Idempotent - the formula is deterministic, so re-running this with
-        the same inputs is a no-op in effect.
+    ) -> int:
+        """Atomically transition a batch `processing` -> `completed`.
+
+        TASK-002.1 (tasks/TASK-002.1/20_design.md F3): replaces the old
+        unconditional `mark_completed` - the predicate
+        `WHERE batch_id=:id AND status='processing'` makes this call safe
+        to race: if two worker instances both finish the last two photos
+        of the same batch at nearly the same time, both may compute the
+        same deterministic `best_photo_id` and call this method, but only
+        the first UPDATE actually matches a row (rowcount=1); the second
+        finds the row already `completed` and matches nothing (rowcount=0)
+        - a harmless no-op, not a duplicate/racing write. Commit is the
+        caller's responsibility (this method never commits itself).
         """
-        await session.execute(
+        result = await session.execute(
             update(Batch)
-            .where(Batch.batch_id == batch_id)
+            .where(Batch.batch_id == batch_id, Batch.status == "processing")
             .values(status="completed", best_photo_id=best_photo_id)
         )
+        return result.rowcount

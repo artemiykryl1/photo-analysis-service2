@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 
 import app.main as main_module
 from app.db.session import get_session
-from app.integrations.metrics import photos_pending
+from app.integrations.metrics_api import photos_pending
 from app.main import app
 from app.repositories.photo_repository import PhotoRepository
 

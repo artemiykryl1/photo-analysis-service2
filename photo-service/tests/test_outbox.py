@@ -22,7 +22,7 @@ import pytest
 from aiokafka.errors import KafkaError
 
 from app.core.config import Settings
-from app.integrations import metrics as metrics_module
+from app.integrations import metrics_api as metrics_module
 from app.services.outbox import run_outbox_publisher
 
 

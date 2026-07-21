@@ -1,0 +1,764 @@
+<title>photo-service · полный гайд по проекту</title>
+<style>
+  :root{
+    --ground:#eef1f4; --panel:#f7f9fb; --ink:#17222c; --ink-soft:#42525f;
+    --ink-faint:#6d7c88; --line:#d7dee4; --line-soft:#e4e9ee;
+    --accent:#0d7d88; --accent-soft:#0d7d8815; --accent-line:#0d7d8840;
+    --code-bg:#101a22; --code-ink:#d6e2ea; --code-comment:#6f8a99; --code-key:#7fd6d0; --code-str:#e0b47a;
+    --st-pending:#b26a06; --st-processing:#245fd0; --st-done:#12854a; --st-failed:#c23a30;
+    --st-pending-bg:#b26a0618; --st-processing-bg:#245fd018; --st-done-bg:#12854a18; --st-failed-bg:#c23a3018;
+    --radius:10px;
+    --sans:-apple-system,"Segoe UI Variable Display","Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Code","SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#0f151a; --panel:#161f27; --ink:#e6edf2; --ink-soft:#aebbc6;
+      --ink-faint:#7f8e9a; --line:#28333c; --line-soft:#1f2830;
+      --accent:#3fb7bf; --accent-soft:#3fb7bf14; --accent-line:#3fb7bf3a;
+      --code-bg:#0a1116; --code-ink:#cddae3; --code-comment:#647d8b; --code-key:#7fd6d0; --code-str:#e0b47a;
+      --st-pending:#d68a2a; --st-processing:#6796ee; --st-done:#43b57e; --st-failed:#e5665c;
+      --st-pending-bg:#d68a2a1f; --st-processing-bg:#6796ee1f; --st-done-bg:#43b57e1f; --st-failed-bg:#e5665c1f;
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#eef1f4; --panel:#f7f9fb; --ink:#17222c; --ink-soft:#42525f; --ink-faint:#6d7c88;
+    --line:#d7dee4; --line-soft:#e4e9ee; --accent:#0d7d88;
+    --code-bg:#101a22; --code-ink:#d6e2ea; --code-comment:#6f8a99;
+    --st-pending:#b26a06; --st-processing:#245fd0; --st-done:#12854a; --st-failed:#c23a30;
+    --st-pending-bg:#b26a0618; --st-processing-bg:#245fd018; --st-done-bg:#12854a18; --st-failed-bg:#c23a3018;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0f151a; --panel:#161f27; --ink:#e6edf2; --ink-soft:#aebbc6; --ink-faint:#7f8e9a;
+    --line:#28333c; --line-soft:#1f2830; --accent:#3fb7bf;
+    --code-bg:#0a1116; --code-ink:#cddae3; --code-comment:#647d8b;
+    --st-pending:#d68a2a; --st-processing:#6796ee; --st-done:#43b57e; --st-failed:#e5665c;
+    --st-pending-bg:#d68a2a1f; --st-processing-bg:#6796ee1f; --st-done-bg:#43b57e1f; --st-failed-bg:#e5665c1f;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.62;
+    -webkit-font-smoothing:antialiased;margin:0}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+  .layout{display:grid;grid-template-columns:1fr;gap:0}
+  @media(min-width:1000px){.layout{grid-template-columns:248px minmax(0,1fr);gap:48px;align-items:start}}
+
+  /* ---- header ---- */
+  header.masthead{padding:64px 0 34px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 18px;font-weight:600}
+  h1.title{font-size:clamp(2.1rem,5vw,3.3rem);line-height:1.04;letter-spacing:-.02em;margin:0;
+    font-weight:800;text-wrap:balance}
+  .lede{font-size:1.12rem;color:var(--ink-soft);max-width:58ch;margin:20px 0 0}
+  .meta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .tag{font-family:var(--mono);font-size:12px;padding:5px 10px;border:1px solid var(--line);
+    border-radius:100px;color:var(--ink-soft);background:var(--panel)}
+
+  /* ---- toc ---- */
+  nav.toc{position:sticky;top:0;align-self:start;padding:26px 0;max-height:100vh;overflow-y:auto}
+  @media(max-width:999px){nav.toc{position:static;max-height:none;border-bottom:1px solid var(--line);padding:20px 0}}
+  .toc h4{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-faint);margin:0 0 12px}
+  .toc ol{list-style:none;margin:0;padding:0;counter-reset:toc}
+  .toc li{counter-increment:toc;margin:1px 0}
+  .toc a{display:flex;gap:9px;text-decoration:none;color:var(--ink-soft);font-size:13.5px;
+    padding:5px 10px;border-radius:7px;border-left:2px solid transparent;line-height:1.35}
+  .toc a::before{content:counter(toc,decimal-leading-zero);font-family:var(--mono);font-size:11px;
+    color:var(--ink-faint);padding-top:2px}
+  .toc a:hover{background:var(--accent-soft);color:var(--ink)}
+  .toc a.active{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft);font-weight:600}
+  .toc a.active::before{color:var(--accent)}
+
+  /* ---- content ---- */
+  main{padding:26px 0 90px;min-width:0}
+  section{padding:34px 0;border-bottom:1px solid var(--line-soft);scroll-margin-top:16px}
+  section:last-child{border-bottom:none}
+  .sec-num{font-family:var(--mono);font-size:12.5px;color:var(--accent);letter-spacing:.1em;font-weight:600}
+  h2{font-size:clamp(1.5rem,3.4vw,2.05rem);line-height:1.12;letter-spacing:-.015em;margin:6px 0 0;
+    font-weight:750;text-wrap:balance}
+  h3{font-size:1.24rem;letter-spacing:-.01em;margin:34px 0 0;font-weight:700}
+  h4{font-size:1.03rem;margin:24px 0 0;font-weight:700;color:var(--ink)}
+  p,li{max-width:70ch}
+  p{margin:14px 0}
+  main a{color:var(--accent)}
+  strong{font-weight:680;color:var(--ink)}
+  em{font-style:normal;color:var(--accent);font-weight:600}
+  ul,ol{padding-left:22px}
+  li{margin:7px 0}
+  code:not(pre code){font-family:var(--mono);font-size:.87em;background:var(--accent-soft);
+    color:var(--ink);padding:2px 6px;border-radius:5px;border:1px solid var(--accent-line);
+    word-break:break-word}
+
+  /* ---- code blocks ---- */
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:var(--radius);
+    padding:18px 20px;overflow-x:auto;margin:18px 0;font-family:var(--mono);font-size:13px;
+    line-height:1.62;border:1px solid #0000;box-shadow:0 1px 0 var(--line)}
+  pre code{font-family:inherit;font-size:inherit}
+  pre .c{color:var(--code-comment);font-style:italic}
+  pre .k{color:var(--code-key)}
+  pre .s{color:var(--code-str)}
+  pre .fn{color:#9ecbff}
+  @media (prefers-color-scheme:light){pre .fn{color:#5b8def}}
+  :root[data-theme="light"] pre .fn{color:#5b8def}
+  :root[data-theme="dark"] pre .fn{color:#9ecbff}
+
+  /* ---- callouts ---- */
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);padding:14px 18px;
+    border-radius:0 var(--radius) var(--radius) 0;margin:20px 0}
+  .note.warn{border-left-color:var(--st-failed);background:var(--st-failed-bg)}
+  .note .lab{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:700;display:block;margin-bottom:4px}
+  .note.warn .lab{color:var(--st-failed)}
+  .note p{margin:6px 0}
+
+  /* ---- status chips (the motif) ---- */
+  .chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:12px;
+    font-weight:600;padding:3px 9px;border-radius:100px;border:1px solid;white-space:nowrap;line-height:1.4}
+  .chip::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+  .chip.pending{color:var(--st-pending);background:var(--st-pending-bg);border-color:var(--st-pending)}
+  .chip.processing{color:var(--st-processing);background:var(--st-processing-bg);border-color:var(--st-processing)}
+  .chip.done{color:var(--st-done);background:var(--st-done-bg);border-color:var(--st-done)}
+  .chip.failed{color:var(--st-failed);background:var(--st-failed-bg);border-color:var(--st-failed)}
+  .lifecycle{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0}
+  .lifecycle .arr{color:var(--ink-faint);font-family:var(--mono)}
+
+  /* ---- file card ---- */
+  .file{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);margin:18px 0;overflow:hidden}
+  .file>.head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line-soft);
+    background:var(--accent-soft)}
+  .file>.head .path{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--ink)}
+  .file>.head .role{font-size:11.5px;color:var(--ink-faint);margin-left:auto;font-family:var(--mono);
+    text-transform:uppercase;letter-spacing:.08em}
+  .file>.body{padding:4px 16px 12px}
+  .file .m{margin:14px 0}
+  .file .m .sig{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;
+    display:block;margin-bottom:2px;word-break:break-word}
+
+  /* ---- pipeline diagram ---- */
+  .flow{display:flex;flex-wrap:wrap;gap:10px;margin:22px 0;counter-reset:step}
+  .flow .step{flex:1 1 150px;min-width:150px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--panel);padding:14px 14px 14px 14px;position:relative}
+  .flow .step .n{counter-increment:step;font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:700}
+  .flow .step .n::before{content:"步 " counter(step);content:counter(step,decimal-leading-zero)}
+  .flow .step .t{font-weight:700;font-size:14px;margin:4px 0 3px}
+  .flow .step .d{font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+
+  .kv{border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;margin:18px 0}
+  .kv table{border-collapse:collapse;width:100%;font-size:13.5px}
+  .kv td{padding:9px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  .kv tr:last-child td{border-bottom:none}
+  .kv td:first-child{font-family:var(--mono);color:var(--accent);white-space:nowrap;width:1%;font-size:12.5px}
+  .kv td:last-child{color:var(--ink-soft)}
+
+  hr.soft{border:none;border-top:1px solid var(--line-soft);margin:26px 0}
+  .foot{padding:40px 0 20px;color:var(--ink-faint);font-size:13px;text-align:center;font-family:var(--mono)}
+  ::selection{background:var(--accent);color:var(--ground)}
+  a:focus-visible,.toc a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+  html{scroll-behavior:smooth}
+</style>
+
+<div class="wrap">
+<header class="masthead">
+  <p class="eyebrow">Полный разбор кода · для новичка в бэкенде</p>
+  <h1 class="title">photo-service: как устроен весь проект</h1>
+  <p class="lede">Бэкенд-сервис анализа фотографий — от одного HTTP-запроса до асинхронного конвейера с очередью, воркером и метриками. Каждый файл, класс и метод, с объяснением терминов и синтаксиса по ходу.</p>
+  <div class="meta-row">
+    <span class="tag">Python 3.12</span><span class="tag">FastAPI</span><span class="tag">PostgreSQL</span>
+    <span class="tag">MinIO</span><span class="tag">Kafka</span><span class="tag">gRPC</span>
+    <span class="tag">Prometheus + Grafana</span><span class="tag">Docker</span>
+  </div>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="Оглавление">
+  <h4>Оглавление</h4>
+  <ol>
+    <li><a href="#p0">Как читать этот гайд</a></li>
+    <li><a href="#p1">Что это за проект, с нуля</a></li>
+    <li><a href="#p2">Синтаксис не из олимпиад</a></li>
+    <li><a href="#p3">Новые понятия конвейера</a></li>
+    <li><a href="#p4">Архитектура и слои</a></li>
+    <li><a href="#p5">Два путешествия запроса</a></li>
+    <li><a href="#p6">core: фундамент</a></li>
+    <li><a href="#p7">schemas: бланки</a></li>
+    <li><a href="#p8">db: база данных</a></li>
+    <li><a href="#p9">integrations: внешний мир</a></li>
+    <li><a href="#p10">repositories: доступ к БД</a></li>
+    <li><a href="#p11">services: мозг</a></li>
+    <li><a href="#p12">api: HTTP-слой</a></li>
+    <li><a href="#p13">worker: обработчик очереди</a></li>
+    <li><a href="#p14">analyzer-stub: заглушка</a></li>
+    <li><a href="#p15">main.py: сборка</a></li>
+    <li><a href="#p16">Миграции БД</a></li>
+    <li><a href="#p17">Инфраструктура и тесты</a></li>
+    <li><a href="#p18">Обе картины целиком</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="p0">
+  <span class="sec-num">00</span>
+  <h2>Как читать этот гайд</h2>
+  <p>Ты приходишь из олимпиадного питона, где программа — это «считал ввод, посчитал, вывел, завершилась». Бэкенд устроен иначе: это программа, которая <strong>запускается и живёт вечно</strong>, ожидая запросов по сети, и обслуживает <strong>много клиентов одновременно</strong>. Почти весь незнакомый синтаксис и вся «лишняя» сложность существуют ради этих двух фактов.</p>
+  <p>Гайд построен слоями: сначала общая картина и понятия (разделы 1–5), потом разбор каждого файла по слоям (разделы 6–17), в конце — две сквозные истории целиком (раздел 18). Если запутаешься в файле — вернись к разделу 4 «Архитектура» и вспомни, за что отвечает его слой.</p>
+  <p>Через весь проект проходит один мотив — <strong>жизненный цикл фотографии</strong>. Держи его в голове, всё крутится вокруг него:</p>
+  <div class="lifecycle">
+    <span class="chip pending">pending</span><span class="arr">→</span>
+    <span class="chip processing">processing</span><span class="arr">→</span>
+    <span class="chip done">done</span>
+    <span class="arr">/</span><span class="chip failed">failed</span>
+  </div>
+  <p><span class="chip pending">pending</span> фото загружено, ждёт анализа · <span class="chip processing">processing</span> воркер взял его в работу · <span class="chip done">done</span> анализ готов · <span class="chip failed">failed</span> анализ не удался. Всё, что делает система, — это переводит фото по этой цепочке и хранит результат.</p>
+</section>
+
+<section id="p1">
+  <span class="sec-num">01</span>
+  <h2>Что это за проект, с нуля</h2>
+  <p>Представь облачное хранилище фото (упрощённое «Облако Mail»). Пользователь загружает картинку, а сервис должен: сохранить её, прогнать через анализатор (сколько лиц, размыто ли, «отпечаток» изображения) и отдать результат. Анализатор — внешняя нейросеть (пока в разработке, у нас вместо неё заглушка).</p>
+
+  <h3>Из чего состоит система</h3>
+  <p>Когда ты запускаешь <code>docker compose up</code>, поднимается <strong>восемь отдельных программ</strong> (контейнеров), каждая в своей «коробке», общающихся по сети:</p>
+  <div class="kv"><table>
+    <tr><td>api</td><td>наш Python-код (FastAPI). Принимает HTTP-запросы: загрузить фото, узнать статус, скачать.</td></tr>
+    <tr><td>worker</td><td>наш же код, но другой вход. Не слушает HTTP — читает задачи из очереди и гоняет анализ.</td></tr>
+    <tr><td>postgres</td><td>база данных. Хранит <em>метаданные</em>: id фото, имя, статус, результат анализа. Как надёжный Excel с языком запросов SQL.</td></tr>
+    <tr><td>minio</td><td>объектное хранилище (аналог Amazon S3). Хранит <em>сами байты картинок</em> — база для больших файлов не годится.</td></tr>
+    <tr><td>kafka</td><td>очередь сообщений. Передаёт задачи «проанализируй фото X» от api к worker, не заставляя api ждать.</td></tr>
+    <tr><td>analyzer-stub</td><td>заглушка нейросети. Отдельный gRPC-сервис, возвращает правдоподобные результаты. В будущем заменится на реальную нейронку.</td></tr>
+    <tr><td>prometheus</td><td>сборщик метрик. Периодически опрашивает api и worker и копит числа: сколько загружено, сколько ошибок.</td></tr>
+    <tr><td>grafana</td><td>рисует графики по данным Prometheus — дашборд состояния системы.</td></tr>
+  </table></div>
+
+  <h3>Метафора: ресторан</h3>
+  <p>Проще всего думать о сервисе как о ресторане, а о запросе — как о заказе:</p>
+  <ul>
+    <li><strong>api</strong> — зал с официантами: принимают заказ, отдают ответ. Логику не готовят.</li>
+    <li><strong>services</strong> — шеф-повар: вся бизнес-логика (проверить файл, скоординировать хранилище и БД).</li>
+    <li><strong>repositories</strong> — кладовщик: единственный, кто ходит на склад (БД). SQL живёт только у него.</li>
+    <li><strong>integrations</strong> — курьеры до внешних систем (MinIO, Kafka, анализатор).</li>
+    <li><strong>worker</strong> — вторая кухня, работающая «в фоне» по заказам из очереди.</li>
+    <li><strong>core</strong> — администрация: устав (конфиг), журнал (логи), книга жалоб (ошибки).</li>
+  </ul>
+  <p>Смысл дробления на роли: можно нанять второго официанта (масштабировать api), заменить склад (поменять БД) и проверять повара отдельно от официанта (тестировать по кускам). Один файл — одна ответственность, и роли общаются строго по правилам.</p>
+</section>
+
+<section id="p2">
+  <span class="sec-num">02</span>
+  <h2>Синтаксис не из олимпиад</h2>
+  <p>Быстрый словарь конструкций, которые встретятся ниже. Если что-то знакомо — пропускай.</p>
+
+  <h3>Классы и <code>self</code> — данные + функции в одной коробке</h3>
+  <p>Класс склеивает данные и функции, которые с ними работают. <code>PhotoService(repo, storage)</code> создаёт <em>объект</em> (коробку), заполняя его методом <code>__init__</code>. Внутри методов <code>self</code> — «эта самая коробка» (как <code>this</code> в C++, только пишется явно первым параметром). <code>self._repo</code> — данные из коробки; подчёркивание значит «внутреннее, снаружи не трогать».</p>
+<pre><code><span class="k">class</span> PhotoService:
+    <span class="k">def</span> <span class="fn">__init__</span>(self, repository, storage):   <span class="c"># конструктор коробки</span>
+        self._repository = repository            <span class="c"># инструменты кладём внутрь</span>
+        self._storage = storage
+    <span class="k">async def</span> <span class="fn">create_photo</span>(self, ...):           <span class="c"># метод = функция при коробке</span>
+        ...</code></pre>
+
+  <h3>Наследование — «такой же, но с отличиями»</h3>
+  <p><code>class NotFoundError(AppError)</code> читается «NotFoundError умеет всё, что AppError, но кое-что переопределяет». Ловушка на <code>AppError</code> ловит и всех наследников (кошка — тоже животное).</p>
+
+  <h3>Декораторы <code>@</code> — наклейка на функцию</h3>
+  <p>Строчка с <code>@</code> над функцией «регистрирует» её или оборачивает. <code>@router.post("/v1/photos")</code> = «когда придёт POST на этот путь — зови эту функцию». <code>@lru_cache</code> — мемоизация (та самая, что в динамике). Спрашивай не «что за синтаксис», а «куда её регистрируют / чем оборачивают».</p>
+
+  <h3>Аннотации типов — подсказки, которые работают</h3>
+  <p><code>photo_id: uuid.UUID</code>, <code>-&gt; PhotoResponse</code>, <code>str | None</code> («строка или ничего»). Python их не проверяет сам, но FastAPI и Pydantic читают их и на их основе <strong>валидируют вход и строят документацию</strong>. Прислали не-UUID в аннотированный <code>uuid.UUID</code> — FastAPI сам вернёт ошибку 422.</p>
+
+  <h3><code>async</code> / <code>await</code> — кооперативное ожидание</h3>
+  <p>Сервер 95% времени <em>ждёт</em> (БД, сеть, диск). <code>async def</code> — функция, которую можно ставить на паузу; <code>await x</code> — «жду x, а пока пусть работают другие запросы». Так один процесс тянет тысячи соединений. Два следствия: (1) блокирующий код в async замораживает всех — синхронные вызовы оборачивают в <code>anyio.to_thread.run_sync(...)</code>; (2) ждать без предела нельзя — <code>async with asyncio.timeout(60):</code>.</p>
+
+  <h3>Исключения — способ общения, а не «программа упала»</h3>
+  <p><code>raise NotFoundError(...)</code> «выбрасывает» сигнал, который летит вверх по вызовам, пока кто-то не поймает <code>except</code>. <code>finally</code> выполнится всегда. <code>from exc</code> прицепляет первопричину для логов. В нашем проекте ошибку бросают глубоко внизу, а ловит её один обработчик наверху и превращает в HTTP-код.</p>
+
+  <h3><code>with</code>, <code>yield</code>, <code>Depends</code></h3>
+  <p><code>async with SessionLocal() as s:</code> — «открой ресурс, дай как <code>s</code>, гарантированно закрой в конце». <code>yield</code> в функции-зависимости — «сделай до, отдай значение, доделай после». <code>Depends(get_session)</code> в параметрах ручки — маркер «FastAPI, вызови <code>get_session</code> и подставь результат сюда»: функция не создаёт инструменты сама, ей их приносят (это <em>внедрение зависимостей</em>; в тестах приносят подделки).</p>
+</section>
+
+<section id="p3">
+  <span class="sec-num">03</span>
+  <h2>Новые понятия конвейера (TASK-002)</h2>
+  <p>До этого сервис был синхронным: загрузил — сразу ответ. Теперь появляется <strong>асинхронная обработка</strong>: загрузка мгновенна, а тяжёлый анализ идёт в фоне. Для этого вводится несколько идей.</p>
+
+  <h3>Очередь сообщений и Kafka</h3>
+  <p>Очередь позволяет одному сервису передать работу другому <strong>без ожидания результата</strong>. api не держит HTTP-запрос открытым, пока крутится анализ, — он бросает «задачу» в очередь и сразу отвечает пользователю. Плюсы: анализатор может временно падать, воркеров можно масштабировать отдельно, задачи не теряются при падении воркера.</p>
+  <p><strong>Kafka</strong> технически — распределённый журнал событий, но для нас это очередь задач. Ключевые слова:</p>
+  <div class="kv"><table>
+    <tr><td>topic</td><td>именованный поток сообщений. У нас — <code>photo.analysis.requested</code>.</td></tr>
+    <tr><td>producer</td><td>кто пишет в топик. У нас — api (точнее, фоновый outbox).</td></tr>
+    <tr><td>consumer</td><td>кто читает. У нас — worker.</td></tr>
+    <tr><td>offset</td><td>номер последнего обработанного сообщения. Воркер «коммитит» его, чтобы не читать одно и то же дважды.</td></tr>
+    <tr><td>consumer group</td><td>если воркеров несколько, Kafka делит между ними работу.</td></tr>
+  </table></div>
+  <p>В сообщении лежит <strong>не файл</strong>, а лишь ссылка: <code>{photo_id, object_key, created_at, trace_id}</code>. Сам файл — в MinIO.</p>
+
+  <h3>gRPC — как воркер зовёт анализатор</h3>
+  <p>gRPC — способ двум сервисам вызывать функции друг у друга по сети, строго по заранее описанному контракту (файл <code>.proto</code>). Воркер шлёт анализатору <code>object_key</code>, получает <code>{faces_count, is_blurred, blur_score, perceptual_hash}</code>. Анализатор ничего не знает про Kafka и статусы — он просто анализирует картинку.</p>
+
+  <h3>Идемпотентность и защита от гонок</h3>
+  <p>Kafka даёт «at-least-once»: сообщение может прийти <strong>более одного раза</strong> (например, воркер упал сразу после обработки, не успев закоммитить offset). Значит обработка должна быть <em>идемпотентной</em> — повтор не должен навредить. Ещё два воркера могут схватить одно фото. Решение — <strong>атомарный захват</strong>:</p>
+<pre><code>UPDATE photos SET status=<span class="s">'processing'</span>
+WHERE photo_id=:id AND status=<span class="s">'pending'</span>;
+<span class="c"># обновилась 1 строка → этот воркер победил</span>
+<span class="c"># обновилось 0 строк → задачу уже забрали, пропускаем</span></code></pre>
+
+  <h3>Retry с классификацией</h3>
+  <p>Бесконечно повторять нельзя. <strong>Временные</strong> ошибки (таймаут, анализатор недоступен, сеть) повторяем с лимитом (3 попытки, паузы 1-2-4 сек). <strong>Постоянные</strong> (не изображение, ошибка валидации) — сразу в <span class="chip failed">failed</span>, повтор бессмыслен.</p>
+
+  <h3>Outbox — почему загрузка не зависит от Kafka</h3>
+  <p>Если Kafka лежит в момент загрузки, api не должен падать. Приём <em>outbox</em>: при загрузке в БД ставится пометка «событие надо отправить» (<code>publish_status = not_sent</code>). Отдельная фоновая задача периодически берёт такие строки и дошлёт их в Kafka, помечая <code>sent</code>. Загрузка мгновенна и надёжна, даже если очередь временно недоступна.</p>
+
+  <h3>Метрики, Prometheus, Grafana</h3>
+  <p>Метрика — число о состоянии системы (сколько загружено, сколько ждёт, сколько ошибок). Сервисы отдают их по адресу <code>/metrics</code>, Prometheus периодически их забирает и хранит по времени, Grafana рисует графики. Самый важный график — <em>pending photos over time</em>: если растёт, значит воркер не успевает.</p>
+</section>
+
+<section id="p4">
+  <span class="sec-num">04</span>
+  <h2>Архитектура и слои</h2>
+  <p>Код нарезан на слои, и зависимости текут <strong>строго в одну сторону</strong>. Ручка (HTTP) не пишет SQL и не лезет в MinIO сама — она зовёт сервис; сервис зовёт репозиторий и интеграции; SQL живёт только в репозитории.</p>
+<pre><code>api  →  services  →  repositories  →  db
+       ↘ integrations (MinIO, Kafka, gRPC)
+core / schemas — поперечные, доступны всем, сами ни от кого сверху не зависят</code></pre>
+  <div class="kv"><table>
+    <tr><td>api/</td><td>«приёмная»: принять HTTP, вернуть HTTP. Без логики.</td></tr>
+    <tr><td>services/</td><td>«мозг»: бизнес-правила, координация БД + хранилища + очереди.</td></tr>
+    <tr><td>repositories/</td><td>«кладовщик»: только запросы к БД. Весь SQL здесь.</td></tr>
+    <tr><td>db/</td><td>описание таблиц (модели) и подключение к БД.</td></tr>
+    <tr><td>integrations/</td><td>общение с внешними системами: MinIO, Kafka, gRPC-анализатор, метрики.</td></tr>
+    <tr><td>schemas/</td><td>«бланки» — форма JSON, который принимает и отдаёт API.</td></tr>
+    <tr><td>core/</td><td>поперечное: конфиг, логи, ошибки.</td></tr>
+    <tr><td>worker/</td><td>отдельный вход в приложение: цикл чтения очереди.</td></tr>
+  </table></div>
+  <p>Правило зависимостей окупается именно в тестах: раз сервис получает свои инструменты через конструктор, в тесте ему подсовывают подделки (моки) вместо настоящих БД и MinIO — поэтому 367 тестов бегут за секунды без всякой инфраструктуры.</p>
+</section>
+
+<section id="p5">
+  <span class="sec-num">05</span>
+  <h2>Два путешествия запроса</h2>
+  <p>В проекте два независимых потока. Держи их отдельно — тогда все файлы встанут на места.</p>
+
+  <h3>Путешествие A — загрузка (синхронное, мгновенное)</h3>
+  <div class="flow">
+    <div class="step"><span class="n"></span><div class="t">api / ручка</div><div class="d">POST /v1/photos, читает байты файла, зовёт сервис.</div></div>
+    <div class="step"><span class="n"></span><div class="t">service</div><div class="d">проверяет magic bytes, создаёт запись, кладёт байты в MinIO.</div></div>
+    <div class="step"><span class="n"></span><div class="t">БД + MinIO</div><div class="d">строка со статусом pending и пометкой not_sent; файл в хранилище.</div></div>
+    <div class="step"><span class="n"></span><div class="t">ответ 202</div><div class="d">пользователь сразу получает photo_id и статус pending.</div></div>
+  </div>
+  <p>Заметь: Kafka здесь <strong>не участвует</strong>. Загрузка ничего не ждёт от очереди.</p>
+
+  <h3>Путешествие B — анализ (асинхронное, в фоне)</h3>
+  <div class="flow">
+    <div class="step"><span class="n"></span><div class="t">outbox</div><div class="d">фоновая задача в api видит not_sent, шлёт событие в Kafka, ставит sent.</div></div>
+    <div class="step"><span class="n"></span><div class="t">kafka</div><div class="d">хранит задачу {photo_id, object_key,...} в топике.</div></div>
+    <div class="step"><span class="n"></span><div class="t">worker</div><div class="d">читает, атомарно захватывает pending→processing.</div></div>
+    <div class="step"><span class="n"></span><div class="t">gRPC → analyzer</div><div class="d">шлёт object_key, получает результаты анализа.</div></div>
+    <div class="step"><span class="n"></span><div class="t">БД</div><div class="d">пишет analysis_results, статус done (или failed после ретраев).</div></div>
+  </div>
+  <p>Теперь <code>GET /v1/photos/{id}</code> вернёт <span class="chip done">done</span> с заполненным <code>analysis</code>. Всё это время каждый шаг логируется с общим <code>trace_id</code>, пришедшим из сообщения.</p>
+</section>
+
+<section id="p6">
+  <span class="sec-num">06</span>
+  <h2>core: фундамент</h2>
+  <p>Поперечные модули, которыми пользуются все слои: конфиг, логи, ошибки.</p>
+
+  <div class="file">
+    <div class="head"><span class="path">app/core/config.py</span><span class="role">конфиг</span></div>
+    <div class="body">
+      <p>Единый источник всех настроек. Класс <code>Settings(BaseSettings)</code> — «магический»: при создании сам читает переменные окружения и файл <code>.env</code> и заполняет поля. Дефолты подобраны под docker-compose (хосты <code>postgres</code>, <code>kafka</code>, <code>minio</code>), так что всё работает даже без <code>.env</code>.</p>
+      <div class="m"><span class="sig">get_settings() → Settings</span>Обёрнута в <code>@lru_cache</code>: настройки парсятся <strong>один раз</strong> за процесс, дальше все получают тот же объект (синглтон, дёшево).</div>
+      <p>TASK-002 добавил сюда блок Kafka (<code>KAFKA_BOOTSTRAP_SERVERS</code>, <code>KAFKA_TOPIC_ANALYSIS_REQUESTED</code>, <code>KAFKA_CONSUMER_GROUP</code>), адрес анализатора (<code>ANALYZER_GRPC_ADDR</code>), параметры ретраев (<code>WORKER_MAX_ATTEMPTS=3</code>, <code>RETRY_BACKOFF_BASE_SECONDS=1</code>), порт метрик воркера и настройки outbox (<code>OUTBOX_POLL_INTERVAL_SECONDS</code>, <code>OUTBOX_BATCH_SIZE</code>).</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/core/logging.py</span><span class="role">логи + трассировка</span></div>
+    <div class="body">
+      <p>Логи пишутся в stdout как JSON — так их собирает контейнерная платформа. Главная хитрость — сквозной <code>request_id</code>/<code>trace_id</code>, чтобы по одному id найти все строки одного запроса.</p>
+      <div class="m"><span class="sig">trace_id_var: ContextVar</span>«Глобальная переменная, у которой в каждой одновременной задаче своё значение». Обычная глобальная сломалась бы — два параллельных запроса перезаписали бы id друг друга.</div>
+      <div class="m"><span class="sig">class TraceIdFilter</span>Крючок, срабатывающий на <strong>каждую</strong> строку лога: дописывает в неё <code>trace_id</code>, <code>request_id</code> (одно значение под двумя именами) и имя сервиса.</div>
+      <div class="m"><span class="sig">setup_logging(level)</span>Настраивает корневой логгер: чистит старые обработчики (чтобы в тестах строки не двоились), вешает JSON-форматтер и фильтр. Воркер зовёт эту же функцию — трассировка у api и worker единообразна.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/core/errors.py</span><span class="role">ошибки → HTTP</span></div>
+    <div class="body">
+      <p>На каждую ожидаемую неприятность — свой класс-исключение, знающий свой HTTP-код. Код просто делает <code>raise NotFoundError(...)</code>, а один обработчик наверху превращает это в аккуратный JSON.</p>
+      <div class="m"><span class="sig">class AppError(Exception)</span>Базовый класс: атрибуты <code>error_code</code>, <code>http_status</code>, <code>message</code>. Конструктор принимает своё сообщение и опциональный <code>photo_id</code> (уйдёт в лог).</div>
+      <div class="m"><span class="sig">наследники</span><code>StorageUnavailable</code> (503), <code>NotFoundError</code> (404), <code>ValidationError</code> (400), <code>ConflictError</code> (409), <code>PayloadTooLargeError</code> (413), <code>UnsupportedMediaTypeError</code> (415), и новый в TASK-002 — <code>BatchSizeError</code> (400, если файлов в батче не 2–10).</div>
+      <div class="m"><span class="sig">register_exception_handlers(app)</span>Регистрирует два обработчика: на <code>AppError</code> — вернуть его <code>error_code</code>/<code>http_status</code>; на любое другое <code>Exception</code> — «страховочная сетка»: залогировать полный traceback для нас, а клиенту отдать сдержанный 500 <code>INTERNAL_ERROR</code> без утечки деталей. Тело всех ошибок единое: <code>{error_code, message, request_id}</code>.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p7">
+  <span class="sec-num">07</span>
+  <h2>schemas: бланки ответов</h2>
+  <div class="file">
+    <div class="head"><span class="path">app/schemas/photos.py</span><span class="role">Pydantic DTO</span></div>
+    <div class="body">
+      <p>Pydantic-модели описывают <strong>форму</strong> JSON. FastAPI по ним валидирует ответы и строит автодокументацию (<code>/docs</code>).</p>
+      <div class="m"><span class="sig">UploadPhotoResponse</span><code>{photo_id, status: Literal["pending"]}</code>. <code>Literal["pending"]</code> — тип «строго строка pending и ничего больше»: только что загруженное фото не может быть в другом статусе, это гарантия на уровне типов.</div>
+      <div class="m"><span class="sig">AnalysisResultResponse</span>Результат анализа: <code>faces_count</code>, <code>is_blurred</code>, <code>blur_score</code>, <code>perceptual_hash</code>. TASK-002.</div>
+      <div class="m"><span class="sig">PhotoResponse</span>Карточка фото: <code>id, filename, status</code> плюс новое поле <code>analysis: AnalysisResultResponse | None = None</code>. Дефолт <code>None</code> — <strong>обратная совместимость</strong>: старые клиенты, не знающие про analysis, не сломаются.</div>
+      <div class="m"><span class="sig">BatchAcceptedResponse / BatchPhotoItem</span>Ответ на загрузку батча: <code>{batch_id, photos:[{photo_id, status:"pending"}]}</code>.</div>
+      <div class="m"><span class="sig">BatchResponse / BatchPhotoDetail</span>Статус батча: <code>{batch_id, status, photos:[...с analysis], best_photo_id}</code>. <code>status</code> — <code>Literal["processing","completed"]</code>; <code>best_photo_id</code> заполняется только когда батч завершён.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p8">
+  <span class="sec-num">08</span>
+  <h2>db: база данных</h2>
+
+  <div class="file">
+    <div class="head"><span class="path">app/db/models.py</span><span class="role">ORM-модели</span></div>
+    <div class="body">
+      <p>ORM (SQLAlchemy) описывает таблицу как Python-класс: строка таблицы = объект класса. <code>Mapped[str]</code> — «в Python это строка, сделай столбец».</p>
+      <div class="m"><span class="sig">class PhotoStatus(str, enum.Enum)</span>Перечисление 4 статусов. Двойное наследование <code>(str, Enum)</code> — трюк: <code>PhotoStatus.pending == "pending"</code> истинно, и в JSON сериализуется само.</div>
+      <div class="m"><span class="sig">class Photo</span>Главная таблица. Базовые поля (TASK-001): <code>photo_id</code> (первичный ключ, случайный UUID — не угадать чужие фото), <code>filename</code>, <code>object_key</code> (путь в MinIO, <code>unique=True</code> — защита от дублей на уровне БД), <code>created_at</code> (ставит сама БД), <code>status</code>. Добавлено в TASK-002: <code>attempts</code>, <code>last_error_code</code>, <code>last_error_message</code> (учёт ретраев); <code>publish_status</code> + <code>published_at</code> (outbox); <code>trace_id</code> (сквозная трассировка); <code>batch_id</code> (в каком батче, nullable — у одиночных фото батча нет).</div>
+      <div class="m"><span class="sig">relationship analysis / batch</span><code>relationship(...)</code> — не столбец, а «навигация»: <code>photo.analysis</code> даёт связанный объект результата, <code>photo.batch</code> — батч. Загружается заранее (см. репозиторий), чтобы в async-коде не сработала «ленивая» подгрузка.</div>
+      <div class="m"><span class="sig">class AnalysisResult</span>Результат анализа, 1 к 1 с фото: <code>photo_id</code> одновременно первичный ключ И внешний ключ → гарантирует не больше одной строки на фото (это и делает запись идемпотентной). Поля <code>faces_count</code>, <code>is_blurred</code>, <code>blur_score</code>, <code>perceptual_hash</code>. <code>ondelete="CASCADE"</code> — удалят фото, результат удалится сам.</div>
+      <div class="m"><span class="sig">class Batch</span>Батч: <code>batch_id</code>, <code>status</code> (VARCHAR + CHECK, не enum — см. ниже), <code>best_photo_id</code> (nullable, внешний ключ на лучшее фото), <code>created_at</code>. Связь <code>photos</code> с <code>order_by="created_at, photo_id"</code> — детерминированный порядок в ответе (фикс ревью M2).</div>
+      <p><strong>Почему статусы outbox и батча — VARCHAR + CHECK, а не enum?</strong> В TASK-000 был баг: enum создавался в миграции дважды и падал. Чтобы не повторять класс бага, новые статусы сделаны обычными строками с проверкой <code>CHECK (status IN (...))</code>.</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/db/session.py</span><span class="role">подключение к БД</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">engine</span>Фабрика подключений с <strong>пулом</strong> (до 10 постоянных + 5 на пик — открывать соединение дорого, переиспользуем). <code>pool_pre_ping=True</code> — проверять живость перед выдачей (БД могла перезапуститься).</div>
+      <div class="m"><span class="sig">SessionLocal</span>Фабрика <em>сессий</em>. Сессия — «рабочая тетрадь» одной единицы работы с БД, в её рамках живёт транзакция.</div>
+      <div class="m"><span class="sig">get_session()</span>FastAPI-зависимость: на каждый запрос выдаёт свежую сессию через <code>yield</code> и закрывает после ответа. Важно: тут нет commit/rollback — <strong>кто фиксирует транзакцию, решает сервис</strong>. Это позволяет откатить всё, если следующий шаг (MinIO/Kafka) упадёт.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p9">
+  <span class="sec-num">09</span>
+  <h2>integrations: внешний мир</h2>
+  <p>Всё общение с внешними системами заперто здесь. Остальной код знает только методы — если завтра MinIO заменят на S3, поменяется один файл.</p>
+
+  <div class="file">
+    <div class="head"><span class="path">app/integrations/storage.py</span><span class="role">MinIO</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">class ObjectStorage</span>Обёртка над MinIO SDK. Создаётся один раз на старте.</div>
+      <div class="m"><span class="sig">ensure_bucket()</span>Идемпотентно создаёт «папку верхнего уровня» (бакет) на старте. Ошибку SDK переводит в <code>StorageUnavailable</code> (503).</div>
+      <div class="m"><span class="sig">save_file / get_file / delete_file</span>Сохранить/прочитать/удалить байты. <code>NoSuchKey</code> при чтении → <code>NotFoundError</code> (404), прочие сбои → 503. <code>delete_file</code> «по возможности» — компенсация для осиротевшего файла, молча глотает «уже нет».</div>
+      <p>SDK <strong>синхронный</strong>. В async-ручке его нельзя звать напрямую (заморозит сервер) — сервис оборачивает вызовы в <code>anyio.to_thread</code>. Исключение — <code>ensure_bucket</code> на старте, вне запросов.</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/integrations/kafka_producer.py</span><span class="role">Kafka producer · TASK-002</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">class KafkaEventProducer</span>Обёртка над <code>AIOKafkaProducer</code> (async). Настройки <code>acks="all"</code> + <code>enable_idempotence=True</code> — надёжная доставка без дублей на стороне Kafka.</div>
+      <div class="m"><span class="sig">ensure_started()</span>Ленивый идемпотентный старт (фикс блокера B1 от reviewer-1). Если Kafka на старте api была недоступна и <code>start()</code> упал — этот метод переподнимет продюсер при следующей попытке (сбрасывает сломанный экземпляр, строит новый). <code>asyncio.Lock</code> делает его безопасным при гонках. Зовётся каждую итерацию outbox — реальное самовосстановление.</div>
+      <div class="m"><span class="sig">publish_analysis_requested(...)</span>Публикует JSON <code>{photo_id, object_key, created_at, trace_id}</code> в топик, ключ сообщения — <code>photo_id</code> (сообщения одного фото попадут в один partition, порядок сохранится). Бросает при сбое — вызывающий (outbox) оставит строку <code>not_sent</code> и повторит.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/integrations/analyzer_client.py</span><span class="role">gRPC-клиент · TASK-002</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">class AnalyzerGrpcClient</span>Async-клиент анализатора. Канал создаётся один раз на старте воркера (не на каждое сообщение) и закрывается при остановке.</div>
+      <div class="m"><span class="sig">analyze(photo_id, object_key)</span>Вызывает удалённый метод <code>AnalyzePhoto</code>, возвращает результат. Бросает при любом сбое RPC — классифицирует его вызывающий.</div>
+      <div class="m"><span class="sig">classify_grpc_error(exc) → RetryDecision</span>Чистая функция (без I/O, легко тестируется): <code>TimeoutError</code> и временные gRPC-статусы (UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED, ABORTED, INTERNAL) → <span class="chip processing" style="border:none;background:none;padding:0">RETRY</span>; постоянные (INVALID_ARGUMENT, NOT_FOUND и пр.) и всё непонятное → <span class="chip failed" style="border:none;background:none;padding:0">NO_RETRY</span> (fail-safe: не понимаем ошибку — не крутим бесконечно).</div>
+      <div class="m"><span class="sig">error_code_from_exception / truncate_error_message</span>Короткий код ошибки для <code>last_error_code</code> и обрезка длинного текста для <code>last_error_message</code> (не хранить безразмерные строки).</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/integrations/metrics.py</span><span class="role">Prometheus-метрики · TASK-002</span></div>
+    <div class="body">
+      <p>Объявления всех метрик, общие для api и worker (они — разные процессы, у каждого свой реестр). Counter — только растёт (событий стало больше); Gauge — текущее значение (может падать); Histogram — распределение (например, длительности).</p>
+      <div class="m"><span class="sig">метрики API</span><code>photos_uploaded_total</code>, <code>http_requests_total{method,endpoint,status}</code>, <code>http_request_duration_seconds</code>, <code>storage_upload_errors_total</code>, <code>kafka_publish_errors_total</code>, gauge <code>photos_pending</code>.</div>
+      <div class="m"><span class="sig">метрики worker</span><code>photo_analysis_started/completed_total</code>, <code>photo_analysis_failed_total{reason}</code> (reason = no_retry / retries_exhausted), <code>photo_analysis_duration_seconds</code>, <code>analyzer_grpc_errors_total{code}</code>, <code>worker_messages_processed_total{result}</code>.</div>
+      <p>Важно: в лейблах <strong>нет</strong> <code>photo_id</code>/<code>object_key</code> — иначе «взрыв кардинальности» (миллион серий). Пути шаблонизированы: <code>/v1/photos/{photo_id}</code>, а не конкретный id.</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/grpc_gen/ · protos/analyzer.proto</span><span class="role">контракт gRPC</span></div>
+    <div class="body">
+      <p><code>analyzer.proto</code> описывает интерфейс на языке Protocol Buffers: сервис <code>PhotoAnalyzer</code> с методом <code>AnalyzePhoto(object_key) → {faces_count, is_blurred, blur_score, perceptual_hash}</code>. Из него генерируются Python-«стабы» (<code>analyzer_pb2.py</code>, <code>analyzer_pb2_grpc.py</code>) — код, через который клиент и сервер понимают друг друга. Стабы <strong>закоммичены</strong> в <code>app/grpc_gen/</code> (а не генерятся в образе), иначе ломались бы локальные тесты.</p>
+    </div>
+  </div>
+</section>
+
+<section id="p10">
+  <span class="sec-num">10</span>
+  <h2>repositories: доступ к БД</h2>
+  <p>Единственное место с SQL. Каждый метод получает сессию аргументом; репозиторий <strong>никогда не коммитит сам</strong> — границу транзакции держит сервис.</p>
+
+  <div class="file">
+    <div class="head"><span class="path">app/repositories/photo_repository.py</span><span class="role">таблица photos</span></div>
+    <div class="body">
+      <div class="note"><span class="lab">Синтаксис</span><p>Файл начинается с <code>from __future__ import annotations</code>. Это делает аннотации «ленивыми» (не вычисляются при импорте). Нужно потому, что в классе есть метод с именем <code>list</code>, затеняющий встроенный тип <code>list</code> в аннотациях методов ниже. На Python 3.12 (Docker) без этой строки импорт падал — <strong>тот самый баг, что поймал живой прогон</strong>.</p></div>
+      <div class="m"><span class="sig">create(session, photo)</span>Вставка: <code>add</code> + <code>flush</code> (шлёт INSERT, но <strong>не</strong> commit). Дубль <code>object_key</code> → <code>ConflictError</code> (409).</div>
+      <div class="m"><span class="sig">get_by_id / list</span>Чтение одного/списка с <code>selectinload(Photo.analysis)</code> — сразу подгружает результат анализа (в async нельзя лениво). <code>list</code> сортирует «сначала новые».</div>
+      <div class="m"><span class="sig">claim_for_processing(session, id) → int</span>Сердце идемпотентности: атомарный <code>UPDATE ... WHERE status='pending'</code>. Возвращает число обновлённых строк: <strong>1</strong> — этот воркер выиграл; <strong>0</strong> — задачу уже забрали (дубль/повторная доставка), пропускаем. Предикат менять нельзя (зафиксировано спекой).</div>
+      <div class="m"><span class="sig">record_attempt(...)</span>После неудачной попытки пишет <code>attempts</code> и <code>last_error_*</code> — чтобы прогресс сохранялся, даже если воркер упадёт до финала.</div>
+      <div class="m"><span class="sig">mark_done(...)</span>Терминал-успех: <code>status='done'</code> и <strong>обнуляет</strong> <code>last_error_*</code> (фикс M3: фото, упавшее на 1-й попытке и успешное на 2-й, не должно тащить старую ошибку).</div>
+      <div class="m"><span class="sig">mark_failed(...)</span>Терминал-провал: <code>status='failed'</code> + <code>last_error_*</code>.</div>
+      <div class="m"><span class="sig">fetch_unpublished / mark_published</span>Для outbox: выбрать строки <code>not_sent</code> (по частичному индексу — быстро) и пометить <code>sent</code> + <code>published_at</code>.</div>
+      <div class="m"><span class="sig">count_pending(session) → int</span><code>SELECT count(*) WHERE status='pending'</code> — питает gauge <code>photos_pending</code>, обновляемый при каждом скрейпе <code>/metrics</code>.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/repositories/analysis_result_repository.py</span><span class="role">таблица analysis_results</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">upsert(...)</span><code>INSERT ... ON CONFLICT (photo_id) DO NOTHING</code>. Если результат для этого фото уже есть (повторная доставка сообщения), запись просто ничего не делает — не перезапишет и не упадёт. <code>photo_id</code> здесь и первичный ключ, и ключ идемпотентности.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/repositories/batch_repository.py</span><span class="role">таблица batches</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">create(session, batch)</span>Вставка батча (add + flush, без commit).</div>
+      <div class="m"><span class="sig">get_by_id(...)</span>Загружает батч вместе с его фото и результатами анализа за один заход: <code>selectinload(Batch.photos).selectinload(Photo.analysis)</code> — без этого <code>batch.photos[i].analysis</code> в async-коде вызвал бы ленивую подгрузку (ошибка).</div>
+      <div class="m"><span class="sig">mark_completed(...)</span>Записывает вычисленный <code>best_photo_id</code> и <code>status='completed'</code>. Идемпотентно — формула детерминирована, повтор с теми же входами ничего не меняет.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p11">
+  <span class="sec-num">11</span>
+  <h2>services: мозг приложения</h2>
+
+  <div class="file">
+    <div class="head"><span class="path">app/services/photo_service.py</span><span class="role">логика фото и батчей</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">_validate(data) → (ext, content_type)</span>Проверка по <strong>магическим байтам</strong>: первые байты файла (JPEG начинается с <code>FF D8 FF</code>, PNG с <code>89 50 4E 47…</code>) — единственный честный способ (расширение и заголовок можно подделать). По порядку: пусто → 400, &gt;50 МБ → 413, не картинка → 415.</div>
+      <div class="m"><span class="sig">create_photo(session, filename, data)</span>Главный сценарий загрузки. Порядок <strong>flush БД → MinIO → commit</strong>: сначала вставка (не коммит), потом байты в MinIO (в отдельном потоке, под таймаутом 60с), потом commit. Если MinIO упал — <code>rollback</code> (строки как не было, битой записи не остаётся) и 503. В той же транзакции ставит <code>publish_status='not_sent'</code> и <code>trace_id</code> — <strong>Kafka здесь не трогается вообще</strong>, её дело — outbox.</div>
+      <div class="m"><span class="sig">create_batch(session, files)</span>Батч 2–10 файлов, атомарно. <strong>Две фазы:</strong> (1) провалидировать <em>все</em> файлы и проверить суммарный размер (&gt;500 МБ → 413) — до любой записи; один плохой файл отклоняет весь батч, ничего не сохранено. (2) создать батч и по фото на файл, сохранить в MinIO. Сбой на середине → rollback + удаление уже сохранённых объектов (компенсация). Каждое фото помечается <code>not_sent</code> → уйдёт в конвейер через outbox.</div>
+      <div class="m"><span class="sig">get_photo / list_photos</span>Читают из репозитория, мапят в <code>PhotoResponse</code>. Хелпер <code>_analysis_response()</code> кладёт результат анализа в поле <code>analysis</code> (или <code>None</code>, пока не done).</div>
+      <div class="m"><span class="sig">get_photo_content(...)</span>Достаёт байты из MinIO (тоже поток + таймаут), возвращает <code>(data, content_type, filename)</code> для отдачи файла.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/services/batch_service.py</span><span class="role">лучший кадр</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">select_best_photo(photos) → uuid | None</span><strong>Чистая функция</strong> (без БД, легко тестируется). Берёт только фото со статусом <span class="chip done">done</span> и выбирает лучшее по формуле-ключу: <code>is_blurred ↑</code> (не размытое лучше) → <code>blur_score ↑</code> (меньше размытия) → <code>faces_count ↓</code> (больше лиц) → <code>created_at ↑</code> → <code>photo_id ↑</code> (финальный детерминированный тай-брейк, фикс M1). Все failed → <code>None</code>.</div>
+      <div class="m"><span class="sig">BatchService.get_batch(...)</span>Собирает агрегатную картину батча. Если <strong>все</strong> фото терминальны (done/failed) → <code>completed</code>, считает <code>best_photo_id</code> и (при первом переходе) сохраняет его в БД. Иначе → <code>processing</code>, <code>best_photo_id = None</code>. Нет батча → 404.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/services/outbox.py</span><span class="role">фоновый publisher · TASK-002</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">run_outbox_publisher(...)</span>Фоновая asyncio-задача, запущенная из lifespan api. Цикл: <code>ensure_started()</code> продюсера → выбрать строки <code>not_sent</code> → опубликовать каждую в Kafka → пометить <code>sent</code>. Если Kafka недоступна — строка остаётся <code>not_sent</code> (не падаем, счётчик <code>kafka_publish_errors_total</code>, повтор на следующей итерации). Это <strong>единственный</strong> путь публикации в Kafka. Останавливается по <code>stop_event</code> (graceful shutdown).</div>
+      <p>Почему так: загрузка (HTTP) никогда не блокируется и не падает из-за Kafka — она лишь ставит пометку в БД, а доставку берёт на себя фоновая задача. Это даёт гарантию «at-least-once» без Kafka в горячем пути запроса.</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/services/analysis_processor.py</span><span class="role">ядро воркера · TASK-002</span></div>
+    <div class="body">
+      <p>Обработка одного сообщения. Вынесено из consumer'а, чтобы тестировать без Kafka. Не знает про Kafka и HTTP — получает сессию и данные.</p>
+      <div class="m"><span class="sig">process(session, photo_id, object_key)</span>Три шага. <strong>1. Захват:</strong> <code>claim_for_processing</code>; если 0 строк — дубль, лог + <code>worker_messages_processed_total{result=skipped}</code>, выход. <strong>2. Анализ с ретраями:</strong> цикл до <code>WORKER_MAX_ATTEMPTS</code>, вызов gRPC под таймаутом; при ошибке — <code>classify_grpc_error</code>, запись <code>record_attempt</code>, и либо стоп (NO_RETRY или исчерпан лимит), либо пауза <code>backoff·2^(n-1)</code> (1-2-4 сек) и повтор. <strong>3. Терминал:</strong> успех → <code>upsert</code> результата + <code>mark_done</code> → <span class="chip done">done</span>; иначе <code>mark_failed</code> с причиной <code>no_retry</code>/<code>retries_exhausted</code> → <span class="chip failed">failed</span>. По ходу инкрементит метрики и меряет длительность.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p12">
+  <span class="sec-num">12</span>
+  <h2>api: HTTP-слой</h2>
+
+  <div class="file">
+    <div class="head"><span class="path">app/api/middleware.py</span><span class="role">request_id · чистый ASGI</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">class RequestIdMiddleware</span>Прослойка, через которую проходит каждый запрос. Берёт входящий <code>X-Request-ID</code> или генерит новый uuid, кладёт в <code>trace_id_var</code> (виден во всех логах запроса) и эхом добавляет заголовок в ответ. В <code>finally</code> всегда сбрасывает contextvar.</div>
+      <p>Написано «чистым ASGI» (низкоуровнево), а не удобным <code>BaseHTTPMiddleware</code>, потому что тот исполняет приложение в отдельной задаче и contextvar не был бы виден внутри ручек. Чистый ASGI работает в той же задаче — id доступен везде вниз по стеку.</p>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/api/metrics_middleware.py</span><span class="role">RED-метрики · TASK-002</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">metrics_middleware(request, call_next)</span>Меряет каждый запрос: длительность и код ответа → <code>http_requests_total</code> и <code>http_request_duration_seconds</code>. Лейбл <code>endpoint</code> — <strong>шаблон маршрута</strong> (<code>/v1/photos/{photo_id}</code>), а не сырой путь: иначе на каждый id завелась бы отдельная серия (взрыв кардинальности). Здесь допустим простой <code>BaseHTTPMiddleware</code> — он ничего не кладёт в contextvar.</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/api/photos.py</span><span class="role">ручки фото</span></div>
+    <div class="body">
+      <p>Роутер с префиксом <code>/v1/photos</code>. Ручки тонкие: читают вход, зовут сервис, возвращают результат. Никакого SQL/MinIO.</p>
+      <div class="m"><span class="sig">POST "" → 202</span><code>upload_photo</code>: читает байты, зовёт <code>service.create_photo</code>. Код 202 «принято» — намёк, что анализ будет позже.</div>
+      <div class="m"><span class="sig">GET "" </span><code>list_photos</code> с пагинацией <code>limit</code>(1–100)/<code>offset</code>. Невалидные значения FastAPI отбивает сам (422).</div>
+      <div class="m"><span class="sig">GET "/{photo_id}"</span><code>get_photo_status</code>: аннотация <code>uuid.UUID</code> → не-UUID даст 422 автоматически.</div>
+      <div class="m"><span class="sig">GET "/{photo_id}/content"</span><code>download_photo_content</code>: отдаёт сами байты с правильным <code>Content-Type</code> и юникод-безопасным <code>Content-Disposition</code> (хелпер <code>_content_disposition</code> по RFC 6266/5987 — чтобы кириллическое имя файла не роняло запрос в 500).</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/api/batches.py</span><span class="role">ручки батчей · TASK-002</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">POST "/photos/batch" → 202</span><code>upload_batch</code>: принимает <code>list[UploadFile]</code> (несколько файлов в одной форме), читает все байты, зовёт <code>service.create_batch</code>.</div>
+      <div class="m"><span class="sig">GET "/batches/{batch_id}"</span><code>get_batch</code>: зовёт <code>BatchService.get_batch</code> → статус батча, все фото с их анализом и <code>best_photo_id</code>.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p13">
+  <span class="sec-num">13</span>
+  <h2>worker: обработчик очереди</h2>
+  <p>Второй «вход» в приложение — отдельный контейнер из того же образа, но запускается как <code>python -m app.worker.main</code>. Не слушает HTTP, а бесконечно читает Kafka.</p>
+
+  <div class="file">
+    <div class="head"><span class="path">app/worker/main.py</span><span class="role">точка входа воркера</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">_run()</span>Сборка: настроить логи, поднять свой HTTP-сервер метрик на порту 8001 (<code>start_http_server</code>), создать gRPC-клиент и <code>AnalysisProcessor</code>, подключить Kafka-consumer (<code>enable_auto_commit=False</code> — offset коммитим сами, <code>auto_offset_reset="earliest"</code> — читать с начала, если группа новая), запустить <code>consume_loop</code>.</div>
+      <div class="m"><span class="sig">_install_shutdown_handlers(stop_event)</span>Ловит SIGTERM/SIGINT → ставит <code>stop_event</code> для graceful shutdown. На Windows (нет POSIX-сигналов) откатывается на <code>signal.signal</code>.</div>
+      <div class="m"><span class="sig">graceful shutdown (finally)</span>По сигналу: доработать текущее сообщение → <code>consumer.stop()</code> (коммит последнего offset) → <code>analyzer.close()</code> (закрыть gRPC-канал) → <code>engine.dispose()</code> (закрыть пул БД).</div>
+    </div>
+  </div>
+
+  <div class="file">
+    <div class="head"><span class="path">app/worker/consumer.py</span><span class="role">цикл чтения очереди</span></div>
+    <div class="body">
+      <div class="m"><span class="sig">consume_loop(consumer, processor, stop_event)</span>Пока не пришёл сигнал остановки: взять сообщение (<code>getone</code> с таймаутом — чтобы между сообщениями проверять <code>stop_event</code>), обработать, <strong>потом</strong> закоммитить offset. Порядок «сначала обработать, потом коммит» = <em>at-least-once</em>: если воркер упадёт до коммита, Kafka пришлёт сообщение снова, а идемпотентный захват сделает повтор безопасным.</div>
+      <div class="m"><span class="sig">_handle_message(message, processor)</span>Разобрать JSON. «Ядовитое» сообщение (нечитаемый JSON, или нет/пусто <code>photo_id</code>/<code>object_key</code>) — залогировать и пропустить (offset всё равно закоммитится), а не зависнуть на нём навечно (фиксы reviewer-2). Достать <code>trace_id</code> из сообщения в contextvar, открыть сессию, отдать в <code>processor.process</code>; любую неожиданную ошибку поймать, чтобы один сбой не убил весь цикл.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p14">
+  <span class="sec-num">14</span>
+  <h2>analyzer-stub: заглушка нейросети</h2>
+  <div class="file">
+    <div class="head"><span class="path">analyzer-stub/server.py</span><span class="role">внешний gRPC-сервис</span></div>
+    <div class="body">
+      <p>Отдельная маленькая программа (свой Dockerfile), <strong>намеренно не импортирует ничего из <code>app.*</code></strong> — она изображает внешний сервис. Реализует контракт <code>analyzer.proto</code>. В TASK-003 её заменят на реальную нейронку простой сменой адреса <code>ANALYZER_GRPC_ADDR</code>.</p>
+      <div class="m"><span class="sig">_analyze(object_key)</span>Результат <strong>детерминирован</strong> от <code>object_key</code> через sha256: <code>faces_count = digest[0] % 6</code>, <code>blur_score</code> из следующих байт (0.0–1.0), <code>is_blurred = blur_score &gt; 0.6</code>, <code>perceptual_hash</code> = первые 16 hex-символов. Одно и то же фото всегда даёт один результат — поэтому тесты и демо воспроизводимы.</div>
+      <div class="m"><span class="sig">PhotoAnalyzerServicer.AnalyzePhoto</span>Обработчик gRPC-вызова: считает результат, логирует, возвращает. <code>serve()</code> поднимает async gRPC-сервер на порту 50051.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p15">
+  <span class="sec-num">15</span>
+  <h2>main.py: сборка приложения</h2>
+  <div class="file">
+    <div class="head"><span class="path">app/main.py</span><span class="role">точка входа api</span></div>
+    <div class="body">
+      <p>«Оглавление» приложения — тут ничего не считается, только проводка.</p>
+      <div class="m"><span class="sig">lifespan(app)</span>Код старта (до <code>yield</code>) и остановки (после). <strong>Старт:</strong> создать <code>ObjectStorage</code> и убедиться в бакете; пингнуть БД (<code>SELECT 1</code>); поднять <code>KafkaEventProducer</code> (под таймаутом 10с — если Kafka не готова, лишь warning, api всё равно стартует); запустить фоновую задачу <code>run_outbox_publisher</code>. <strong>Остановка:</strong> послать <code>stop_event</code>, дождаться outbox (до 15с, иначе отменить), остановить продюсер, закрыть пул БД.</div>
+      <div class="m"><span class="sig">сборка app</span>Создать FastAPI, навесить <code>RequestIdMiddleware</code> и <code>metrics_middleware</code>, зарегистрировать обработчики ошибок, подключить роутеры <code>photos</code> и <code>batches</code>.</div>
+      <div class="m"><span class="sig">GET /metrics</span>Отдаёт метрики в текстовом формате Prometheus. Перед отдачей обновляет gauge <code>photos_pending</code> запросом к БД (под таймаутом 3с; сбой — залогировать и отдать прежнее значение, скрейп не должен падать 500).</div>
+      <div class="m"><span class="sig">GET /healthz</span>Liveness: всегда 200, без внешних зависимостей — «жив ли процесс». Kubernetes перезапускает контейнер, если этот эндпоинт молчит.</div>
+      <div class="m"><span class="sig">GET /readyz</span>Readiness: 200, если доступны БД и MinIO, иначе 503 — «готов ли обслуживать». Разделение healthz/readyz — стандарт для Kubernetes.</div>
+    </div>
+  </div>
+</section>
+
+<section id="p16">
+  <span class="sec-num">16</span>
+  <h2>Миграции БД</h2>
+  <p>Схема БД версионируется, как код: каждое изменение — пронумерованный файл. <code>alembic upgrade head</code> прокатывает все ещё не применённые (это делает api-контейнер перед стартом).</p>
+  <div class="file">
+    <div class="head"><span class="path">migrations/versions/v001_init_photos.py</span><span class="role">первая схема</span></div>
+    <div class="body">
+      <p>Создаёт enum <code>photo_status</code> и таблицу <code>photos</code>. Ключевая деталь — <code>create_type=False</code>: без неё enum создавался дважды и падал с <code>DuplicateObjectError</code> (баг TASK-000, пойманный живым прогоном).</p>
+    </div>
+  </div>
+  <div class="file">
+    <div class="head"><span class="path">migrations/versions/v002_add_analysis_and_batches.py</span><span class="role">схема конвейера · TASK-002</span></div>
+    <div class="body">
+      <p><code>down_revision="v001"</code> — продолжает цепочку. Порядок в <code>upgrade()</code> важен (внешние ключи ссылаются на уже созданные таблицы): (1) <code>analysis_results</code>, (2) <code>batches</code>, (3) новые колонки <code>photos</code> (в т.ч. <code>batch_id</code> → batches), (4) CHECK-констрейнты, (5) индексы (включая частичный по <code>publish_status='not_sent'</code> для быстрого опроса outbox). <code>downgrade()</code> откатывает всё в обратном порядке. Новых enum нет — только VARCHAR + CHECK, чтобы не повторить класс бага v001.</p>
+    </div>
+  </div>
+  <div class="file">
+    <div class="head"><span class="path">migrations/env.py · alembic.ini</span><span class="role">конфиг миграций</span></div>
+    <div class="body">
+      <p>Берёт адрес БД из <code>Settings.DATABASE_URL</code> (не хардкод в ini) — приложение и миграции всегда в одной БД. Async-обвязка мостит синхронный Alembic и async-драйвер asyncpg.</p>
+    </div>
+  </div>
+</section>
+
+<section id="p17">
+  <span class="sec-num">17</span>
+  <h2>Инфраструктура и тесты</h2>
+
+  <div class="file">
+    <div class="head"><span class="path">docker-compose.yml</span><span class="role">8 контейнеров</span></div>
+    <div class="body">
+      <p>Описывает все сервисы и их связи. Ключевое: <code>depends_on ... condition: service_healthy</code> — api и worker стартуют только когда postgres/kafka реально готовы (не просто «запущены»). Kafka в режиме <strong>KRaft</strong> (без ZooKeeper) — упрощение для MVP. api перед стартом делает <code>alembic upgrade head</code>. Пароль Grafana — через <code>${GRAFANA_ADMIN_PASSWORD:-admin_dev_only}</code> (не хардкод, фикс reviewer-2). <code>exec</code> перед командой — чтобы сигнал остановки доходил до uvicorn/воркера напрямую и они гасились штатно (фикс M7).</p>
+    </div>
+  </div>
+  <div class="file">
+    <div class="head"><span class="path">Dockerfile · analyzer-stub/Dockerfile · pyproject.toml</span><span class="role">сборка</span></div>
+    <div class="body">
+      <p>Основной <code>Dockerfile</code> — двухслойный: сначала ставит зависимости (кэшируется), потом код (флаг <code>--no-install-project</code> обязателен — иначе сборка падает без папки <code>app/</code>). У analyzer-stub свой минимальный образ с генерацией gRPC-стабов при сборке. <code>pyproject.toml</code> — манифест: рантайм-зависимости (+aiokafka, grpcio, protobuf, prometheus-client) и dev-инструменты (pytest, ruff, testcontainers, grpcio-tools).</p>
+    </div>
+  </div>
+  <div class="file">
+    <div class="head"><span class="path">prometheus.yml · grafana/</span><span class="role">наблюдаемость</span></div>
+    <div class="body">
+      <p><code>prometheus.yml</code> говорит Prometheus опрашивать <code>api:8000/metrics</code> и <code>worker:8001/metrics</code>. Папка <code>grafana/</code> — «provisioning»: datasource (Prometheus) и готовый дашборд из 4 графиков (uploads/min, длительность анализа, ошибки, pending) подключаются автоматически, без ручной настройки.</p>
+    </div>
+  </div>
+  <div class="file">
+    <div class="head"><span class="path">tests/</span><span class="role">367 тестов, покрытие 98%</span></div>
+    <div class="body">
+      <p>Почти все тесты бегут <strong>без</strong> настоящих Kafka/БД/MinIO — вместо них подделки (моки), это возможно благодаря внедрению зависимостей. Критичные наборы: формула лучшего кадра (все тай-брейки), классификация retry/no-retry, идемпотентность воркера (захват вернул 0), переходы outbox, атомарность батча, валидация «ядовитых» сообщений, обратная совместимость. Отдельно — интеграционный тест миграции на <strong>настоящем</strong> Postgres (через testcontainers, требует Docker; без Docker авто-скип) — он закрывает пробел, из-за которого проскочил баг enum.</p>
+      <div class="note"><span class="lab">Важный урок</span><p>Тесты (367 passed) прошли локально на Python 3.14, но api падал в Docker на Python 3.12 — из-за разницы в вычислении аннотаций. Это поймал только <strong>живой прогон</strong>. Мораль: зелёные тесты не заменяют запуск на реальном окружении.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="p18">
+  <span class="sec-num">18</span>
+  <h2>Обе картины целиком</h2>
+
+  <h3>Что происходит при <code>curl -F "file=@a.jpg" .../v1/photos</code></h3>
+  <ol>
+    <li><strong>uvicorn</strong> принимает соединение, передаёт в приложение.</li>
+    <li><strong>RequestIdMiddleware</strong> генерит <code>request_id</code>, кладёт в contextvar; <strong>metrics_middleware</strong> засекает время.</li>
+    <li><strong>Роутер</strong> зовёт <code>upload_photo</code>; FastAPI готовит зависимости (сессия, сервис).</li>
+    <li><strong>Сервис</strong> смотрит первые байты → JPEG; генерит <code>photo_id</code>, путь <code>photos/{id}/original.jpg</code>.</li>
+    <li><strong>Репозиторий</strong>: INSERT + flush (со статусом <span class="chip pending">pending</span> и <code>publish_status=not_sent</code>).</li>
+    <li><strong>Storage</strong> (в потоке, под таймаутом): байты в MinIO.</li>
+    <li><strong>Сервис</strong>: commit. Ответ <strong>202</strong> <code>{photo_id, status:"pending"}</code>, middleware дописывает <code>X-Request-ID</code>.</li>
+  </ol>
+
+  <h3>Что происходит дальше, в фоне</h3>
+  <ol>
+    <li><strong>Outbox</strong> (фоновая задача api) видит строку <code>not_sent</code>, публикует <code>{photo_id, object_key, created_at, trace_id}</code> в Kafka, ставит <code>sent</code>.</li>
+    <li><strong>Worker</strong> читает сообщение, атомарно <code>claim_for_processing</code>: <span class="chip pending">pending</span> → <span class="chip processing">processing</span> (1 строка = выиграл).</li>
+    <li><strong>gRPC</strong>: воркер шлёт <code>object_key</code> анализатору, получает <code>{faces_count, is_blurred, blur_score, perceptual_hash}</code>.</li>
+    <li><strong>БД</strong>: <code>upsert</code> результата + <code>mark_done</code> → <span class="chip done">done</span>. Offset коммитится после обработки.</li>
+    <li><strong>Клиент</strong>: <code>GET /v1/photos/{id}</code> теперь отдаёт <span class="chip done">done</span> с полем <code>analysis</code>.</li>
+  </ol>
+  <p>А если анализатор временно лежит — воркер повторит до 3 раз с паузами, и лишь потом переведёт в <span class="chip failed">failed</span> с <code>last_error_*</code>. Если Kafka лежала при загрузке — фото просто дольше побудет <span class="chip pending">pending</span>, пока outbox не дошлёт задачу. Ни битых данных, ни потерянных задач, ни зависших HTTP-запросов.</p>
+
+  <div class="note"><span class="lab">Одной фразой</span><p>Олимпиадная программа — это функция (вход → выход). Бэкенд — это организация: штат ролей с регламентами на случай ЧП, очередью между цехами и журналом учёта, которая обслуживает поток клиентов без выходных.</p></div>
+</section>
+
+<p class="foot">photo-service · TASK-000 → TASK-001 → TASK-002 · сгенерировано как справочник по проекту</p>
+</main>
+</div>
+</div>
+
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+    var map = {};
+    links.forEach(function(a){ var id=a.getAttribute('href').slice(1); map[id]=a; });
+    var sections = Array.prototype.slice.call(document.querySelectorAll('section[id]'));
+    var obs = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(e.isIntersecting){
+          links.forEach(function(l){l.classList.remove('active');});
+          if(map[e.target.id]) map[e.target.id].classList.add('active');
+        }
+      });
+    }, {rootMargin:'-10% 0px -80% 0px', threshold:0});
+    sections.forEach(function(s){obs.observe(s);});
+  })();
+</script>
