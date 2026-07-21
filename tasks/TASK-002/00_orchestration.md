@@ -30,6 +30,13 @@
 | 8 | test-debugger | 60_debug.md | ✅ done — фикс `from __future__ import annotations` в photo_repository.py; подтверждён на 3.12 (api+worker Up, /metrics 200); 367 passed |
 | 9 | pr-publisher | 70_pr.md | ✅ done — PR #5 открыт (feat/task-002-async-pipeline → main), 64 файла |
 
+## Пост-ревью раунд (живой ревьюер воркшопа, после PR #5) — коммит 3c0ccf5
+- FIX-1 (M7): exec в command api/worker → SIGTERM доходит до uvicorn/worker (graceful shutdown в контейнере).
+- FIX-2: docstring consumer.py приведён в соответствие с поведением передоставки (дедуп, не восстановление; stuck-processing = известный пробел, reaper в TASK-003).
+- AGENTS.md добавлен (импорт CLAUDE.md + ростер агентов).
+- Гейты после правок: ruff clean, 367 passed, compose config OK. Запушено в ветку PR #5.
+- Осталось на пользователе: подписи на схеме ВК Доски (референс-диаграмма выдана), затем зачёт.
+
 ## Живой прогон (docker compose, 8 контейнеров) — ✅ ПРОЙДЕН
 - Одиночное фото: POST → 202 pending → worker сам довёл до done с analysis (faces/blur/hash).
 - Батч 3 фото: POST /v1/photos/batch → 202 → completed, best_photo_id верный по формуле (b2 blur 0.236 победил).

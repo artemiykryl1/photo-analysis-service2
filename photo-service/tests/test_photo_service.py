@@ -22,6 +22,7 @@ import pytest
 import app.services.photo_service as photo_service_module
 from app.core.errors import (
     ConflictError,
+    DatabaseUnavailable,
     NotFoundError,
     PayloadTooLargeError,
     StorageUnavailable,
@@ -288,6 +289,91 @@ class TestCreatePhotoOrderAndRollback:
             await service.create_photo(session, "a.jpg", JPEG_BYTES)
 
         repository.create.assert_awaited_once()
+
+
+class TestCreatePhotoCommitFailureCompensation:
+    """TASK-002.1 F5: the file is already saved to MinIO by the time
+    `session.commit()` runs - if the commit itself fails, that object
+    would be an orphan unless it is compensated for (best-effort
+    `delete_file`) and the caller is told the truth (503
+    `DatabaseUnavailable`, not a bare 500)."""
+
+    async def test_commit_failure_rolls_back_deletes_the_object_and_raises_database_unavailable(
+        self,
+    ):
+        repository = AsyncMock()
+        storage = MagicMock()
+        session = AsyncMock()
+        session.commit.side_effect = ConnectionError("db connection lost")
+        service = PhotoService(repository=repository, storage=storage)
+
+        with pytest.raises(DatabaseUnavailable):
+            await service.create_photo(session, "a.jpg", JPEG_BYTES)
+
+        session.rollback.assert_awaited_once()
+        storage.delete_file.assert_called_once()
+
+    async def test_the_object_deleted_is_the_one_that_was_actually_saved(self):
+        repository = AsyncMock()
+        storage = MagicMock()
+        session = AsyncMock()
+        session.commit.side_effect = ConnectionError("db connection lost")
+        service = PhotoService(repository=repository, storage=storage)
+
+        with pytest.raises(DatabaseUnavailable):
+            await service.create_photo(session, "a.jpg", JPEG_BYTES)
+
+        saved_key = storage.save_file.call_args.args[0]
+        deleted_key = storage.delete_file.call_args.args[0]
+        assert deleted_key == saved_key
+
+    async def test_delete_file_failure_during_compensation_does_not_mask_database_unavailable(
+        self,
+    ):
+        """review-1 R7: if the compensating delete ALSO fails (e.g. MinIO
+        is unreachable too), the caller must still see
+        `DatabaseUnavailable`, not the delete's own exception."""
+        repository = AsyncMock()
+        storage = MagicMock()
+        storage.delete_file.side_effect = RuntimeError("minio also unreachable")
+        session = AsyncMock()
+        session.commit.side_effect = ConnectionError("db connection lost")
+        service = PhotoService(repository=repository, storage=storage)
+
+        with pytest.raises(DatabaseUnavailable):
+            await service.create_photo(session, "a.jpg", JPEG_BYTES)
+
+    async def test_successful_commit_never_triggers_compensation(self):
+        """Sanity check: the try/except around `commit()` must not fire
+        (and therefore must not delete anything) on the ordinary happy
+        path - see TestCreatePhotoHappyPath for the full happy-path
+        coverage this must not disturb."""
+        repository = AsyncMock()
+        storage = MagicMock()
+        session = AsyncMock()
+        service = PhotoService(repository=repository, storage=storage)
+
+        await service.create_photo(session, "a.jpg", JPEG_BYTES)
+
+        storage.delete_file.assert_not_called()
+
+    async def test_rollback_itself_failing_still_deletes_the_object_and_raises_503(self):
+        """review-1 m2: `rollback()` can raise on its own (e.g. the
+        connection was already invalidated by the failed commit). Even so,
+        the best-effort `delete_file` compensation must still run and the
+        caller must still see `DatabaseUnavailable` (503) - not a bare
+        500 from an unhandled rollback failure."""
+        repository = AsyncMock()
+        storage = MagicMock()
+        session = AsyncMock()
+        session.commit.side_effect = ConnectionError("db connection lost")
+        session.rollback.side_effect = RuntimeError("connection already invalidated")
+        service = PhotoService(repository=repository, storage=storage)
+
+        with pytest.raises(DatabaseUnavailable):
+            await service.create_photo(session, "a.jpg", JPEG_BYTES)
+
+        storage.delete_file.assert_called_once()
 
 
 class TestGetPhoto:

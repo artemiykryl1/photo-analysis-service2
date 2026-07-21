@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.integrations.metrics import http_request_duration_seconds, http_requests_total
+from app.integrations.metrics_api import http_request_duration_seconds, http_requests_total
 
 
 async def metrics_middleware(

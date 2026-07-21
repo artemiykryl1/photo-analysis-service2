@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.photos import get_photo_service
+from app.api.uploads import read_batch_files
 from app.db.session import get_session
 from app.repositories.batch_repository import BatchRepository
 from app.schemas.photos import BatchAcceptedResponse, BatchResponse
@@ -32,7 +33,7 @@ async def upload_batch(
     service: PhotoService = Depends(get_photo_service),
     session: AsyncSession = Depends(get_session),
 ) -> BatchAcceptedResponse:
-    files = [(f.filename, await f.read()) for f in file]
+    files = await read_batch_files(file)
     return await service.create_batch(session, files)
 
 

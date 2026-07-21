@@ -24,7 +24,7 @@ from app.core.errors import register_exception_handlers
 from app.core.logging import setup_logging
 from app.db.session import SessionLocal, engine, get_session
 from app.integrations.kafka_producer import KafkaEventProducer
-from app.integrations.metrics import photos_pending
+from app.integrations.metrics_api import photos_pending
 from app.integrations.storage import ObjectStorage
 from app.repositories.photo_repository import PhotoRepository
 from app.schemas.photos import HealthResponse

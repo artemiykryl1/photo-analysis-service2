@@ -193,3 +193,49 @@ class TestUpdateStatus:
         assert "UPDATE photos SET" in compiled
         assert "status=" in compiled.replace(" ", "")
         assert photo_id.hex in compiled
+
+
+class TestGetBatchId:
+    """TASK-002.1 (design F3): backs
+    `AnalysisProcessor._maybe_complete_batch` - returns `None` both for a
+    single-photo upload (no batch) and for a photo id that doesn't exist,
+    and the real `batch_id` otherwise."""
+
+    async def test_returns_none_when_photo_has_no_batch(self):
+        session = _mock_session()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        session.execute.return_value = result_mock
+        repo = PhotoRepository()
+
+        result = await repo.get_batch_id(session, uuid.uuid4())
+
+        assert result is None
+
+    async def test_returns_the_batch_id_when_present(self):
+        session = _mock_session()
+        batch_id = uuid.uuid4()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = batch_id
+        session.execute.return_value = result_mock
+        repo = PhotoRepository()
+
+        result = await repo.get_batch_id(session, uuid.uuid4())
+
+        assert result == batch_id
+
+    async def test_query_filters_by_photo_id_and_selects_batch_id_column(self):
+        session = _mock_session()
+        result_mock = MagicMock()
+        result_mock.scalar_one_or_none.return_value = None
+        session.execute.return_value = result_mock
+        repo = PhotoRepository()
+        photo_id = uuid.uuid4()
+
+        await repo.get_batch_id(session, photo_id)
+
+        stmt = session.execute.call_args.args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "photos.batch_id" in compiled
+        assert "photos.photo_id" in compiled
+        assert photo_id.hex in compiled

@@ -17,7 +17,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.photos import get_photo_service
 from app.core.errors import NotFoundError
 from app.db.session import get_session
-from app.integrations.metrics import http_request_duration_seconds, http_requests_total
+from app.integrations.metrics_api import http_request_duration_seconds, http_requests_total
 from app.main import app
 from app.schemas.photos import PhotoResponse
 

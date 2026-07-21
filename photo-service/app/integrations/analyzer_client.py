@@ -45,6 +45,16 @@ class AnalyzerGrpcClient:
     def __init__(self, addr: str, timeout: float) -> None:
         self._addr = addr
         self._timeout = timeout
+        # TASK-002.1 (tasks/TASK-002.1/20_design.md F7): `insecure_channel`
+        # is a deliberate, documented choice for the current MVP topology,
+        # not an oversight - `worker` and `analyzer-stub` both live inside
+        # the same single docker-compose network with no untrusted
+        # participants. Deferred to TASK-003 (rather than added here):
+        # configurable TLS (`ANALYZER_GRPC_TLS` + a root-cert path) once a
+        # real analyzer arrives over an external network, where the actual
+        # trust boundary/certificate model will be defined. No new env var
+        # is introduced in TASK-002.1 to avoid shipping dead configuration
+        # for a plaintext-only stub.
         self._channel = grpc.aio.insecure_channel(addr)
         self._stub = analyzer_pb2_grpc.PhotoAnalyzerStub(self._channel)
 

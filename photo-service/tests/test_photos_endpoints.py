@@ -20,6 +20,7 @@ from httpx import ASGITransport, AsyncClient
 from app.api.photos import get_photo_service
 from app.core.errors import (
     ConflictError,
+    DatabaseUnavailable,
     NotFoundError,
     PayloadTooLargeError,
     StorageUnavailable,
@@ -106,6 +107,10 @@ class TestUploadPhotoErrorMapping:
             (UnsupportedMediaTypeError(), 415, "UNSUPPORTED_MEDIA_TYPE"),
             (ConflictError(), 409, "CONFLICT"),
             (StorageUnavailable(), 503, "SERVICE_UNAVAILABLE"),
+            # TASK-002.1 F5: a commit failure after the file is already in
+            # MinIO surfaces as DatabaseUnavailable - same public
+            # error_code/status as StorageUnavailable (contract unchanged).
+            (DatabaseUnavailable(), 503, "SERVICE_UNAVAILABLE"),
         ],
     )
     async def test_upload_error_returns_expected_status_and_unified_body(

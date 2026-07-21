@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.core.config import Settings
 from app.core.logging import trace_id_var
 from app.integrations.kafka_producer import KafkaEventProducer
-from app.integrations.metrics import kafka_publish_errors_total
+from app.integrations.metrics_api import kafka_publish_errors_total
 from app.repositories.photo_repository import PhotoRepository
 
 logger = logging.getLogger(__name__)

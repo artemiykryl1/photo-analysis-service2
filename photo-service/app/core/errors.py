@@ -40,6 +40,24 @@ class StorageUnavailable(AppError):
     message = "Storage is unreachable"
 
 
+class DatabaseUnavailable(AppError):
+    """Raised when `session.commit()` fails after the file(s) were already
+    saved to MinIO (tasks/TASK-002.1/20_design.md F5).
+
+    Deliberately a separate class from `StorageUnavailable` - the failure
+    here is the DATABASE commit, not MinIO, and conflating the two would
+    mislead an operator reading the logs (and tag the error with the
+    wrong root cause). It intentionally reuses the SAME public
+    `error_code`/`http_status` as `StorageUnavailable` ("SERVICE_UNAVAILABLE",
+    503) so the public error contract (`{error_code, message, request_id}`
+    and the set of publicly documented codes) does not change.
+    """
+
+    error_code = "SERVICE_UNAVAILABLE"
+    http_status = 503
+    message = "Service temporarily unavailable"
+
+
 class NotFoundError(AppError):
     """Raised when a requested resource does not exist."""
 

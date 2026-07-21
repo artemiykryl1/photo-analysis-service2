@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: photo
       POSTGRES_PASSWORD: photo
@@ -17,6 +18,7 @@ services:
 
   minio:
     image: minio/minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -37,6 +39,7 @@ services:
   # "Зафиксированные решения".
   kafka:
     image: apache/kafka:3.7.0
+    restart: unless-stopped
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -67,11 +70,13 @@ services:
     build:
       context: .
       dockerfile: analyzer-stub/Dockerfile
+    restart: unless-stopped
     ports:
       - "50051:50051"
 
   api:
     build: .
+    restart: unless-stopped
     # .env is optional (gitignored, local overrides only) - Settings already
     # ship with docker-compose-friendly defaults matching the values below.
     env_file:
@@ -118,6 +123,7 @@ services:
   # consumes photo.analysis.requested and calls analyzer-stub over gRPC.
   worker:
     build: .
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
@@ -160,6 +166,7 @@ services:
   # TASK-002 (design §9.1): scrapes api:8000/metrics + worker:8001/metrics.
   prometheus:
     image: prom/prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
@@ -169,6 +176,7 @@ services:
   # click-through needed - see grafana/provisioning/**, grafana/dashboards/**.
   grafana:
     image: grafana/grafana
+    restart: unless-stopped
     environment:
       # Review-2 fix (tasks/TASK-002/41_review-2.md #1): no hardcoded
       # credential - overridable via .env, with an explicit dev-only

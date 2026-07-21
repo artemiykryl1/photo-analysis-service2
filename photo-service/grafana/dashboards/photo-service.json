@@ -58,7 +58,7 @@
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
         {
-          "expr": "photos_pending",
+          "expr": "photos_pending{job=\"photo-api\"}",
           "legendFormat": "pending",
           "refId": "A"
         }
