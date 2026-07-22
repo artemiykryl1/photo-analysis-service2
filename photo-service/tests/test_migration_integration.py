@@ -14,6 +14,11 @@ TASK-002 (tasks/TASK-002/20_design.md §13.1): extended to also exercise
 the v002 revision (`analysis_results`, `batches`, and the seven new
 `photos` columns) and the full `v002 -> v001 -> base` downgrade chain.
 
+TASK-003 (tasks/TASK-003/20_design.md §6.3): further extended to exercise
+v003 (`analysis_results.eyes_closed_count`/`dominant_color`/`tags`/
+`model_version`) and the full `v003 -> v002 -> v001 -> base` downgrade
+chain.
+
 Requires a running Docker daemon (spins up a disposable
 `postgres:16-alpine` container via testcontainers). Skipped automatically
 when Docker is unreachable so the default `pytest` run stays green in
@@ -74,8 +79,10 @@ def _run_alembic(args: list[str], database_url: str) -> subprocess.CompletedProc
 
 
 async def _inspect_v002_schema_present(dsn: str) -> dict:
-    """Inspect the full post-`upgrade head` (v002) schema: extended
-    `photos`, `analysis_results`, `batches`."""
+    """Inspect the full post-`upgrade head` (now v003) schema: extended
+    `photos`, `analysis_results` (incl. the v003 extended-analyzer
+    columns), `batches`. Function name kept as `_inspect_v002_schema_
+    present` for a minimal diff - it now asserts the v003 shape."""
     import asyncpg
 
     conn = await asyncpg.connect(dsn)
@@ -182,6 +189,20 @@ async def _inspect_v002_tables_exist(dsn: str) -> tuple:
         await conn.close()
 
 
+async def _inspect_analysis_results_columns(dsn: str) -> set:
+    import asyncpg
+
+    conn = await asyncpg.connect(dsn)
+    try:
+        columns = await conn.fetch(
+            "select column_name from information_schema.columns "
+            "where table_name = 'analysis_results'"
+        )
+        return {row["column_name"] for row in columns}
+    finally:
+        await conn.close()
+
+
 async def _inspect_schema_absent(dsn: str) -> tuple:
     import asyncpg
 
@@ -249,6 +270,11 @@ class TestMigrationsAgainstRealPostgres:
                 "blur_score",
                 "perceptual_hash",
                 "created_at",
+                # v003 (tasks/TASK-003/20_design.md §6.1)
+                "eyes_closed_count",
+                "dominant_color",
+                "tags",
+                "model_version",
             }
 
             assert schema["batches_exists"] is True
@@ -269,6 +295,25 @@ class TestMigrationsAgainstRealPostgres:
             assert schema["check_constraints"] == {
                 "ck_photos_publish_status",
                 "ck_batches_status",
+            }
+
+            # downgrade head (v003) -> v002: the four extended-analyzer
+            # columns are gone, everything else (v002 shape) unchanged.
+            downgrade_to_v002 = _run_alembic(["downgrade", "v002"], alembic_url)
+            assert downgrade_to_v002.returncode == 0, (
+                f"alembic downgrade v003 -> v002 must succeed cleanly:\n"
+                f"stdout={downgrade_to_v002.stdout}\nstderr={downgrade_to_v002.stderr}"
+            )
+            analysis_results_columns_after_v002 = asyncio.run(
+                _inspect_analysis_results_columns(raw_dsn)
+            )
+            assert analysis_results_columns_after_v002 == {
+                "photo_id",
+                "faces_count",
+                "is_blurred",
+                "blur_score",
+                "perceptual_hash",
+                "created_at",
             }
 
             # downgrade v002 -> v001: new tables/columns gone, v001 shape restored

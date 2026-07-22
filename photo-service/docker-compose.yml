@@ -94,6 +94,10 @@ services:
       KAFKA_TOPIC_ANALYSIS_REQUESTED: photo.analysis.requested
       KAFKA_CONSUMER_GROUP: photo-analysis-workers
       ANALYZER_GRPC_ADDR: analyzer-stub:50051
+      # TASK-003 B7 (design §8.5): the web UI is served from a different
+      # origin (localhost:8080) than the API (localhost:8000) - an explicit
+      # CORS allow-list is required for the browser to accept the response.
+      CORS_ALLOWED_ORIGINS: http://localhost:8080
     ports:
       - "8000:8000"
     depends_on:
@@ -169,6 +173,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # TASK-003 C4 (design §11.3): alerting rules, shared verbatim with
+      # the Kubernetes ConfigMap in k8s/40-prometheus.yaml.
+      - ./prometheus/rules.yml:/etc/prometheus/rules.yml:ro
     ports:
       - "9090:9090"
 
@@ -191,6 +198,21 @@ services:
       - "3000:3000"
     depends_on:
       prometheus:
+        condition: service_started
+
+  # TASK-003 B7 (design §8.1-8.2): static nginx image, the SAME one used in
+  # Kubernetes - only the env vars below differ between environments.
+  web:
+    build: ./web
+    restart: unless-stopped
+    environment:
+      API_BASE_URL: http://localhost:8000
+      SHARPNESS_THRESHOLD: "100.0"
+      POLL_INTERVAL_MS: "3000"
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
         condition: service_started
 
 volumes:

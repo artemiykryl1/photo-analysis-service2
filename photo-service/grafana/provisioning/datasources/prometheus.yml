@@ -6,6 +6,12 @@ apiVersion: 1
 datasources:
   - name: Prometheus
     type: prometheus
+    # TASK-003 review-1 NB-3/MAJOR-3: the dashboard's panels reference this
+    # datasource by uid (`grafana/dashboards/photo-service.json`:
+    # `"datasource": {"type": "prometheus", "uid": "Prometheus"}`). Without
+    # an explicit `uid` here, Grafana generates a random one on provisioning
+    # and every panel fails with "Datasource not found".
+    uid: Prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true

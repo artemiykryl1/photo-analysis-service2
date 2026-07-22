@@ -1,0 +1,8 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2): dedicated namespace for
+# every photo-service component in the local kind cluster - keeps
+# `kubectl apply -f k8s/` and `kubectl -n photo-service ...` unambiguous,
+# and makes `kind delete cluster` the only cleanup step ever needed.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: photo-service

@@ -30,6 +30,7 @@ from sqlalchemy import (
     Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -121,6 +122,23 @@ class AnalysisResult(Base):
     is_blurred: Mapped[bool] = mapped_column(Boolean, nullable=False)
     blur_score: Mapped[float] = mapped_column(Float, nullable=False)
     perceptual_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # TASK-003 A5/A10 (tasks/TASK-003/20_design.md §6.1, migration v003):
+    # extended analyzer fields. All nullable - rows written before v003
+    # never had an analyzer that returned these, and that's semantically
+    # correct ("this analyzer version didn't provide this data"), not a
+    # data-quality problem to backfill (design §6.4).
+    eyes_closed_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dominant_color: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # JSONB (not postgresql.ARRAY(String)) - design §6.2: SQLAlchemy+asyncpg
+    # hand back JSONB as a plain `list[str]` with no extra dialect-specific
+    # import, and `tags` is an opaque list from an external service we do
+    # not query/filter by membership (dedup by tag is explicitly out of
+    # scope), so the relational-array guarantees TEXT[] would offer are not
+    # worth the tighter PostgreSQL-only coupling on the ORM type.
+    tags: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

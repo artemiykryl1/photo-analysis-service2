@@ -1,0 +1,60 @@
+# TASK-003 C4 (tasks/TASK-003/20_design.md §11.3): alerting rules for the
+# analysis pipeline. Loaded via `rule_files` in `prometheus.yml` (docker
+# compose) and via the same ConfigMap key mounted into `40-prometheus.yaml`
+# (Kubernetes) - one file, two environments. There is no Alertmanager wired
+# up in either environment (out of scope) - these rules are visible and
+# evaluated under Prometheus UI -> Alerts, which is enough for the local
+# demo (design §9.10/D3).
+groups:
+  - name: photo-service
+    rules:
+      - alert: AnalysisFailureRateHigh
+        expr: rate(photo_analysis_failed_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Analysis pipeline failure rate is high"
+          description: >-
+            photo_analysis_failed_total rate has exceeded 0.1/s for 10
+            minutes - the pipeline is degrading.
+
+      - alert: AnalyzerMessageTooLarge
+        expr: increase(analyzer_grpc_errors_total{code="MESSAGE_TOO_LARGE"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prepared image still exceeds the analyzer's message size budget"
+          description: >-
+            At least one image was rejected as MESSAGE_TOO_LARGE in the last
+            15 minutes - re-check ANALYZER_MAX_IMAGE_BYTES/ANALYZER_MAX_IMAGE_SIDE.
+
+      - alert: AnalyzerUnavailable
+        expr: increase(analyzer_grpc_errors_total{code="UNAVAILABLE"}[5m]) > 10
+        labels:
+          severity: critical
+        annotations:
+          summary: "External analyzer appears to be down"
+          description: >-
+            More than 10 UNAVAILABLE errors from the analyzer in the last 5
+            minutes.
+
+      - alert: WorkerStalled
+        expr: >-
+          sum(increase(worker_messages_processed_total[10m])) == 0
+          and sum(photos_pending) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker consumer appears stalled"
+          description: >-
+            No messages processed in 10 minutes while photos are still
+            pending - the asyncio event loop may be wedged (design §9.7:
+            the /metrics liveness probe only proves the process is alive,
+            not that the consumer loop is progressing). Both sides of the
+            `and` are wrapped in sum() so they compare on an empty label
+            set (review-1 NB-13: worker_messages_processed_total carries
+            a `result` label and lives in job=photo-worker, photos_pending
+            is an unlabeled gauge in job=photo-api - without sum() the
+            expression's vector intersection is always empty and the
+            alert can never fire).

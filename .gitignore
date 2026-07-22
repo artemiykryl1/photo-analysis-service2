@@ -1,0 +1,17 @@
+
+# Учебный сервер Sirius: SSH-ключи и архивы доступа (TASK-003)
+*_sirius
+*_sirius.pub
+*.pem
+*.key
+student_ssh_keys*
+
+# Env / secrets (TASK-003 D1, design §13 D-1) - photo-service/.gitignore
+# already ignores its own .env; this repo-root pattern also covers any
+# .env dropped at the repository root (e.g. by tooling run from there).
+.env
+
+# Office temporary files (TASK-003 review feedback)
+~$*.pptx
+~$*.docx
+~$*.xlsx

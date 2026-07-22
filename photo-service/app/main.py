@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -103,6 +104,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
 app.add_middleware(RequestIdMiddleware)
+# TASK-003 B1/B3 (tasks/TASK-003/20_design.md §8.5): the web UI is served
+# from a different origin/port than the API, so a browser needs an explicit
+# CORS allow-list. Starlette applies middleware in the REVERSE order it was
+# added, so adding this AFTER `RequestIdMiddleware` here makes it the
+# OUTERMOST middleware at request time - it can answer a preflight `OPTIONS`
+# (and attach CORS headers to an error response from a handler further in)
+# without depending on `RequestIdMiddleware` having run first.
+# `allow_credentials=False` is deliberate: there is no authentication yet
+# (out of scope), and pairing `True` with an explicit origin list would
+# create a false sense of being "secured" while giving no actual benefit -
+# it would also complicate a future move to token-based auth. The origin
+# list itself comes from `Settings.CORS_ALLOWED_ORIGINS` (never `"*"`).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins_list,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "X-Request-ID"],
+    expose_headers=["X-Request-ID"],
+)
 app.middleware("http")(metrics_middleware)
 register_exception_handlers(app)
 app.include_router(photos.router)

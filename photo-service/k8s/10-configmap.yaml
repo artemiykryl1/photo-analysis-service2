@@ -1,0 +1,56 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.4): non-sensitive settings,
+# shared via `envFrom: configMapRef` by api/worker/migrate-job. Values are
+# the Kubernetes-specific overrides of `app/core/config.py` defaults -
+# mostly just different hostnames (in-cluster Service DNS names instead of
+# docker-compose's) and the one substantive change: `ANALYZER_GRPC_ADDR`
+# points at the REAL external analyzer, not a stub (design §10.2 - no
+# `analyzer-stub` manifest exists in this directory at all).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: photo-config
+  namespace: photo-service
+data:
+  APP_NAME: "photo-service"
+  LOG_LEVEL: "INFO"
+  API_PORT: "8000"
+
+  MINIO_ENDPOINT: "minio:9000"
+  MINIO_BUCKET: "photos"
+  MINIO_SECURE: "false"
+
+  KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+  KAFKA_TOPIC_ANALYSIS_REQUESTED: "photo.analysis.requested"
+  KAFKA_CONSUMER_GROUP: "photo-analysis-workers"
+  KAFKA_PUBLISH_TIMEOUT_SECONDS: "10.0"
+
+  # Design §10.2/§20 D2: the external analyzer, reachable directly from the
+  # kind cluster (spike-confirmed TCP RTT ~40ms). No analyzer-stub Deployment
+  # exists in this directory - swapping this one value is the entire
+  # "switch to the real analyzer" story.
+  ANALYZER_GRPC_ADDR: "45.132.19.101:50051"
+  ANALYZER_GRPC_TIMEOUT: "30.0"
+  ANALYZER_MAX_MESSAGE_BYTES: "4194304"
+  ANALYZER_MAX_IMAGE_BYTES: "3500000"
+  ANALYZER_MAX_IMAGE_SIDE: "2048"
+  ANALYZER_MAX_IMAGE_PIXELS: "50000000"
+
+  STORAGE_READ_TIMEOUT_SECONDS: "60.0"
+  IMAGE_PREP_TIMEOUT_SECONDS: "30.0"
+
+  WORKER_MAX_ATTEMPTS: "3"
+  RETRY_BACKOFF_BASE_SECONDS: "1.0"
+  ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS: "5.0"
+  WORKER_METRICS_PORT: "8001"
+
+  OUTBOX_POLL_INTERVAL_SECONDS: "2.0"
+  OUTBOX_BATCH_SIZE: "100"
+
+  # Design §9.6/C1: initContainer `wait-for-schema` ceiling.
+  WAIT_FOR_SCHEMA_TIMEOUT_SECONDS: "120.0"
+
+  # Design §9.5/§8.5/R11: the web UI is reached via `kubectl port-forward
+  # svc/web 8080:80`, so its browser-visible origin is localhost:8080 - this
+  # MUST stay in sync with whatever port the demonstrator forwards `svc/web`
+  # to. If a different local port is used, update this one value.
+  CORS_ALLOWED_ORIGINS: "http://localhost:8080"

@@ -19,6 +19,12 @@ dependencies = [
     "grpcio>=1.82.1",
     "protobuf>=7.35.1",
     "prometheus-client>=0.25.0",
+    # TASK-003 D1 (tasks/TASK-003/20_design.md §2): image downscaling before
+    # sending to the real analyzer (4 MiB gRPC message cap). Pinned minor -
+    # different Pillow versions can encode slightly different output bytes
+    # for the same input, which would make app/services/image_prep.py's
+    # "same input -> same output" property test flaky across environments.
+    "pillow>=11.0,<12",
 ]
 
 [dependency-groups]

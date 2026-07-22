@@ -35,7 +35,7 @@ class PhotoAnalyzerStub:
             channel: A grpc.Channel.
         """
         self.AnalyzePhoto = channel.unary_unary(
-                '/photo.analyzer.v1.PhotoAnalyzer/AnalyzePhoto',
+                '/analyzer.v1.PhotoAnalyzer/AnalyzePhoto',
                 request_serializer=analyzer__pb2.AnalyzePhotoRequest.SerializeToString,
                 response_deserializer=analyzer__pb2.AnalyzePhotoResponse.FromString,
                 _registered_method=True)
@@ -60,9 +60,9 @@ def add_PhotoAnalyzerServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'photo.analyzer.v1.PhotoAnalyzer', rpc_method_handlers)
+            'analyzer.v1.PhotoAnalyzer', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('photo.analyzer.v1.PhotoAnalyzer', rpc_method_handlers)
+    server.add_registered_method_handlers('analyzer.v1.PhotoAnalyzer', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
@@ -83,7 +83,7 @@ class PhotoAnalyzer:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/photo.analyzer.v1.PhotoAnalyzer/AnalyzePhoto',
+            '/analyzer.v1.PhotoAnalyzer/AnalyzePhoto',
             analyzer__pb2.AnalyzePhotoRequest.SerializeToString,
             analyzer__pb2.AnalyzePhotoResponse.FromString,
             options,

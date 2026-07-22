@@ -1,0 +1,77 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §8.2/§9.2/§9.5): the SAME nginx
+# image used by docker-compose's `web` service - only the env vars differ.
+# `API_BASE_URL=http://localhost:8000` matches how this is demonstrated:
+# the browser is on the SAME machine as the cluster, reaching the API via
+# `kubectl -n photo-service port-forward svc/api 8000:8000` (design §9.5) -
+# not the in-cluster `api` Service DNS name, which the browser cannot
+# resolve.
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: photo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: web
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: photo-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          # Built locally (`docker build -t photo-web:local ./web`) and
+          # loaded via `kind load docker-image photo-web:local --name
+          # photo` (design §9.3) - same `:local` + `IfNotPresent`
+          # requirement as the api/worker image (risk R10).
+          image: photo-web:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            # design §9.5: both `svc/web` and `svc/api` are port-forwarded
+            # to localhost by the demonstrator - the browser's origin
+            # (localhost:8080) and this API target (localhost:8000) must
+            # match what `CORS_ALLOWED_ORIGINS` in k8s/10-configmap.yaml
+            # allows on the api side.
+            - name: API_BASE_URL
+              value: "http://localhost:8000"
+            - name: SHARPNESS_THRESHOLD
+              value: "100.0"
+            - name: POLL_INTERVAL_MS
+              value: "3000"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              memory: "64Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always

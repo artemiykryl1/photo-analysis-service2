@@ -179,3 +179,79 @@ class TestTaskO02Defaults:
         assert settings.ANALYZER_GRPC_ADDR == "custom-analyzer:50051"
         assert settings.WORKER_MAX_ATTEMPTS == 5
         assert settings.OUTBOX_POLL_INTERVAL_SECONDS == 0.5
+
+
+class TestTask003Defaults:
+    """tasks/TASK-003/20_design.md §2/§5/§8.5 (A4) - new image-prep/storage/
+    cooldown/CORS settings must have sane, compose-friendly defaults."""
+
+    def test_image_prep_and_storage_timeout_defaults(self, monkeypatch):
+        for key in (
+            "ANALYZER_MAX_MESSAGE_BYTES",
+            "ANALYZER_MAX_IMAGE_BYTES",
+            "ANALYZER_MAX_IMAGE_SIDE",
+            "ANALYZER_MAX_IMAGE_PIXELS",
+            "STORAGE_READ_TIMEOUT_SECONDS",
+            "IMAGE_PREP_TIMEOUT_SECONDS",
+            "ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        # 4 MiB - the real analyzer's server-side gRPC message ceiling
+        # (spike A3, tasks/TASK-003/05_spike_analyzer.md finding 1).
+        assert settings.ANALYZER_MAX_MESSAGE_BYTES == 4 * 1024 * 1024
+        assert settings.ANALYZER_MAX_IMAGE_BYTES == 3_500_000
+        assert settings.ANALYZER_MAX_IMAGE_SIDE == 2048
+        assert settings.ANALYZER_MAX_IMAGE_PIXELS == 50_000_000
+        assert settings.STORAGE_READ_TIMEOUT_SECONDS == 60.0
+        assert settings.IMAGE_PREP_TIMEOUT_SECONDS == 30.0
+        assert settings.ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS == 5.0
+
+    def test_cors_allowed_origins_default_and_parsing(self, monkeypatch):
+        monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+        assert settings.CORS_ALLOWED_ORIGINS == "http://localhost:8080,http://localhost:5173"
+        assert settings.cors_allowed_origins_list == [
+            "http://localhost:8080",
+            "http://localhost:5173",
+        ]
+
+    def test_cors_allowed_origins_overridden_by_env_and_parsed(self, monkeypatch):
+        settings = _settings_from_env(
+            monkeypatch,
+            CORS_ALLOWED_ORIGINS="http://45.132.19.101:51100, http://localhost:3000,",
+        )
+
+        # whitespace stripped, trailing empty entries dropped.
+        assert settings.cors_allowed_origins_list == [
+            "http://45.132.19.101:51100",
+            "http://localhost:3000",
+        ]
+
+    def test_task003_settings_overridden_by_env(self, monkeypatch):
+        settings = _settings_from_env(
+            monkeypatch,
+            ANALYZER_MAX_IMAGE_BYTES="1000000",
+            ANALYZER_MAX_IMAGE_SIDE="1024",
+            STORAGE_READ_TIMEOUT_SECONDS="10.0",
+            ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS="2.5",
+        )
+
+        assert settings.ANALYZER_MAX_IMAGE_BYTES == 1000000
+        assert settings.ANALYZER_MAX_IMAGE_SIDE == 1024
+        assert settings.STORAGE_READ_TIMEOUT_SECONDS == 10.0
+        assert settings.ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS == 2.5
+
+    def test_wait_for_schema_timeout_default_and_override(self, monkeypatch):
+        """tasks/TASK-003/20_design.md §9.6 (C1) - the initContainer's
+        timeout ceiling for `app.db.wait_for_schema`."""
+        monkeypatch.delenv("WAIT_FOR_SCHEMA_TIMEOUT_SECONDS", raising=False)
+        default_settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert default_settings.WAIT_FOR_SCHEMA_TIMEOUT_SECONDS == 120.0
+
+        overridden = _settings_from_env(monkeypatch, WAIT_FOR_SCHEMA_TIMEOUT_SECONDS="30.0")
+        assert overridden.WAIT_FOR_SCHEMA_TIMEOUT_SECONDS == 30.0

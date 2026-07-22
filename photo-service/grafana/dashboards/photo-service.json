@@ -58,8 +58,41 @@
       "datasource": { "type": "prometheus", "uid": "Prometheus" },
       "targets": [
         {
-          "expr": "photos_pending{job=\"photo-api\"}",
+          "expr": "max(photos_pending{job=\"photo-api\"})",
           "legendFormat": "pending",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Prepared image size (analyzer_image_prepared_bytes)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(analyzer_image_prepared_bytes_bucket[5m])) by (le))",
+          "legendFormat": "p50 bytes",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(analyzer_image_prepared_bytes_bucket[5m])) by (le))",
+          "legendFormat": "p95 bytes",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Downscaled images (rate)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        {
+          "expr": "sum(rate(analyzer_image_downscaled_total[5m]))",
+          "legendFormat": "downscaled/s",
           "refId": "A"
         }
       ]

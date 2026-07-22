@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Фотосервис — Галерея</title>
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>Фотосервис</h1>
+    <nav><a href="index.html">Галерея</a></nav>
+  </header>
+
+  <main>
+    <section class="upload-section">
+      <form id="upload-single-form" class="upload-form">
+        <h2>Загрузить одно фото</h2>
+        <input
+          id="single-file-input"
+          type="file"
+          accept="image/jpeg,image/png"
+          required
+        />
+        <button type="submit">Загрузить</button>
+        <p id="upload-single-error" class="error-text"></p>
+      </form>
+
+      <form id="upload-batch-form" class="upload-form">
+        <h2>Загрузить батч (2–10 файлов)</h2>
+        <input
+          id="batch-file-input"
+          type="file"
+          accept="image/jpeg,image/png"
+          multiple
+          required
+        />
+        <button type="submit">Загрузить батч</button>
+        <p id="upload-batch-error" class="error-text"></p>
+      </form>
+    </section>
+
+    <section>
+      <div class="gallery-toolbar">
+        <h2>Галерея</h2>
+        <button id="refresh-button" type="button" hidden>Обновить</button>
+      </div>
+      <p id="gallery-error" class="error-text"></p>
+      <div id="gallery" class="photo-grid"></div>
+    </section>
+  </main>
+
+  <script src="js/api.js"></script>
+  <script src="js/format.js"></script>
+  <script src="js/gallery.js"></script>
+</body>
+</html>

@@ -66,21 +66,42 @@ def analyzer_stub_module():
     return _load_analyzer_stub_module()
 
 
+_FAKE_IMAGE_BYTES = b"fake-image-bytes"
+
+
 class TestAnalyzerStubDeterminism:
     def test_same_object_key_always_yields_the_same_result(self, analyzer_stub_module):
         key = "photos/123e4567-e89b-12d3-a456-426614174000/original.jpg"
 
-        first = analyzer_stub_module._analyze(key)
-        second = analyzer_stub_module._analyze(key)
+        first = analyzer_stub_module._analyze(key, _FAKE_IMAGE_BYTES)
+        second = analyzer_stub_module._analyze(key, _FAKE_IMAGE_BYTES)
 
         assert first.faces_count == second.faces_count
         assert first.is_blurred == second.is_blurred
         assert first.blur_score == second.blur_score
         assert first.perceptual_hash == second.perceptual_hash
+        assert first.eyes_closed_count == second.eyes_closed_count
+        assert first.dominant_color == second.dominant_color
+        assert list(first.tags) == list(second.tags)
+        assert first.model_version == second.model_version
+
+    def test_result_is_the_same_regardless_of_image_bytes(self, analyzer_stub_module):
+        """TASK-003 D6: determinism is keyed off `object_key`, not the
+        actual image content - a stable per-photo result matters more for
+        tests/demos than reacting to bytes we don't inspect."""
+        key = "photos/123e4567-e89b-12d3-a456-426614174000/original.jpg"
+
+        first = analyzer_stub_module._analyze(key, b"one set of bytes")
+        second = analyzer_stub_module._analyze(key, b"a completely different set of bytes!!")
+
+        assert first.blur_score == second.blur_score
+        assert first.perceptual_hash == second.perceptual_hash
 
     def test_different_object_keys_can_yield_different_results(self, analyzer_stub_module):
         results = {
-            analyzer_stub_module._analyze(f"photos/{i}/original.jpg").perceptual_hash
+            analyzer_stub_module._analyze(
+                f"photos/{i}/original.jpg", _FAKE_IMAGE_BYTES
+            ).perceptual_hash
             for i in range(10)
         }
 
@@ -97,7 +118,7 @@ class TestAnalyzerStubDeterminism:
         ],
     )
     def test_faces_count_is_within_documented_range(self, analyzer_stub_module, object_key):
-        result = analyzer_stub_module._analyze(object_key)
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
         assert 0 <= result.faces_count <= 5
 
     @pytest.mark.parametrize(
@@ -105,22 +126,50 @@ class TestAnalyzerStubDeterminism:
         ["photos/a/original.jpg", "photos/b/original.png", "photos/c/original.jpeg", ""],
     )
     def test_blur_score_is_within_documented_range(self, analyzer_stub_module, object_key):
-        result = analyzer_stub_module._analyze(object_key)
-        assert 0.0 <= result.blur_score <= 1.0
+        """TASK-003 A16 (design §7/D6): reproduces the real analyzer's
+        observed order-of-magnitude range (spike A3: 0.375-99 774), NOT the
+        old stub's 0..1 scale."""
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
+        assert 1.0 <= result.blur_score <= 100_000.0
 
     @pytest.mark.parametrize(
         "object_key",
         ["photos/a/original.jpg", "photos/b/original.png", "photos/c/original.jpeg", ""],
     )
     def test_is_blurred_matches_blur_score_threshold(self, analyzer_stub_module, object_key):
-        result = analyzer_stub_module._analyze(object_key)
-        assert result.is_blurred == (result.blur_score > 0.6)
+        """TASK-003 design §7: unlike the real analyzer (observed always
+        `True`, spike A3 finding 3), the stub computes this field honestly
+        - it is simply unused by `select_best_photo` (design §3.4)."""
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
+        assert result.is_blurred == (result.blur_score < 100.0)
 
     @pytest.mark.parametrize(
         "object_key",
         ["photos/a/original.jpg", "photos/b/original.png", "photos/c/original.jpeg", ""],
     )
     def test_perceptual_hash_is_16_hex_characters(self, analyzer_stub_module, object_key):
-        result = analyzer_stub_module._analyze(object_key)
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
         assert len(result.perceptual_hash) == 16
         int(result.perceptual_hash, 16)  # must be valid hex
+
+    @pytest.mark.parametrize(
+        "object_key",
+        ["photos/a/original.jpg", "photos/b/original.png", "photos/c/original.jpeg", ""],
+    )
+    def test_eyes_closed_count_never_exceeds_faces_count(self, analyzer_stub_module, object_key):
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
+        assert 0 <= result.eyes_closed_count <= result.faces_count
+
+    @pytest.mark.parametrize(
+        "object_key",
+        ["photos/a/original.jpg", "photos/b/original.png", "photos/c/original.jpeg", ""],
+    )
+    def test_dominant_color_is_a_valid_hex_color(self, analyzer_stub_module, object_key):
+        result = analyzer_stub_module._analyze(object_key, _FAKE_IMAGE_BYTES)
+        assert result.dominant_color.startswith("#")
+        assert len(result.dominant_color) == 7
+        int(result.dominant_color[1:], 16)  # must be valid hex
+
+    def test_model_version_is_set(self, analyzer_stub_module):
+        result = analyzer_stub_module._analyze("photos/a/original.jpg", _FAKE_IMAGE_BYTES)
+        assert result.model_version

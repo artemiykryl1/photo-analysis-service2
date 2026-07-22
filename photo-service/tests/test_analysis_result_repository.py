@@ -44,6 +44,60 @@ class TestUpsert:
         assert "0.75" in compiled
         assert "deadbeef" in compiled
 
+    async def test_new_fields_default_to_null_when_omitted(self):
+        """TASK-003 A12: the four new keyword params are optional and
+        default to `None` - callers upserting pre-v003-shaped data (or in
+        tests that don't care) must not be forced to pass them."""
+        session = _mock_session()
+        repo = AnalysisResultRepository()
+
+        await repo.upsert(
+            session,
+            uuid.uuid4(),
+            faces_count=0,
+            is_blurred=False,
+            blur_score=0.0,
+            perceptual_hash="x",
+        )
+
+        stmt = session.execute.call_args.args[0]
+        compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
+        assert "NULL" in compiled
+
+    async def test_executes_insert_with_extended_analyzer_fields(self):
+        """TASK-003 A5/A6/A12 (design §6): the four new columns
+        (`eyes_closed_count`, `dominant_color`, `tags`, `model_version`)
+        flow through to the INSERT statement. `tags` (JSONB) cannot be
+        rendered as a SQL literal by the `literal_binds` compiler option
+        (no literal renderer for JSONB - that's a SQLAlchemy limitation,
+        not something this test needs to prove), so this checks the
+        compiled parameter dict directly instead of the literal SQL text.
+        """
+        session = _mock_session()
+        repo = AnalysisResultRepository()
+        photo_id = uuid.uuid4()
+
+        await repo.upsert(
+            session,
+            photo_id,
+            faces_count=2,
+            is_blurred=False,
+            blur_score=930.47,
+            perceptual_hash="deadbeef",
+            eyes_closed_count=1,
+            dominant_color="#feffff",
+            tags=["face", "bright"],
+            model_version="opencv-dnn-res10-ssd+laplacian+phash/1.1.0",
+        )
+
+        stmt = session.execute.call_args.args[0]
+        params = stmt.compile().params
+        assert params["blur_score"] == 930.47
+        assert params["dominant_color"] == "#feffff"
+        assert params["tags"] == ["face", "bright"]
+        assert params["model_version"] == "opencv-dnn-res10-ssd+laplacian+phash/1.1.0"
+        assert params["eyes_closed_count"] == 1
+
     async def test_uses_on_conflict_do_nothing_keyed_by_photo_id(self):
         """This is the idempotency guarantee - a re-delivered/re-processed
         message must not overwrite (or IntegrityError on) an existing

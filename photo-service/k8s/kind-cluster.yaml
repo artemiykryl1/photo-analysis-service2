@@ -1,0 +1,22 @@
+# TASK-003 C2 (tasks/TASK-003/20_design.md §9.1): kind cluster config for
+# the LOCAL demonstration cluster. One control-plane node is enough - this
+# is a single-machine demo, not a scale test. No `extraPortMappings`: access
+# to the UI/API/Grafana is exclusively via `kubectl port-forward` (§9.5),
+# which keeps the cluster fully portable between machines (nothing here
+# hard-reserves host ports).
+#
+# Usage (from photo-service/):
+#   kind create cluster --name photo --config k8s/kind-cluster.yaml
+#   kind delete cluster --name photo   # tears everything down
+#
+# Not applied via `kubectl apply` - this is the input to `kind create
+# cluster --config`, not a Kubernetes manifest.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    # Pin the node image so the demo is reproducible regardless of which
+    # kind version is installed on the demonstrator's machine (design §9.1,
+    # risk R12/§17.3). Adjust the patch version if `kind` cannot pull this
+    # exact tag.
+    image: kindest/node:v1.31.2

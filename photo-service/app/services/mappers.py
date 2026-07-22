@@ -27,4 +27,8 @@ def analysis_to_response(analysis: AnalysisResult | None) -> AnalysisResultRespo
         is_blurred=analysis.is_blurred,
         blur_score=analysis.blur_score,
         perceptual_hash=analysis.perceptual_hash,
+        eyes_closed_count=analysis.eyes_closed_count,
+        dominant_color=analysis.dominant_color,
+        tags=analysis.tags,
+        model_version=analysis.model_version,
     )
