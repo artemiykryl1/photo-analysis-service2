@@ -1,0 +1,12 @@
+# TASK-002 (tasks/TASK-002/20_design.md §9.2): provisions the Prometheus
+# datasource automatically on Grafana startup - no manual "Add data
+# source" click-through needed for local dev.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true

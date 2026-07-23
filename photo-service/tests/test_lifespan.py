@@ -103,3 +103,69 @@ async def test_lifespan_disposes_engine_on_shutdown_even_after_body_runs():
             pass
 
         mock_engine.dispose.assert_awaited_once()
+
+
+async def test_lifespan_cancels_outbox_task_when_shutdown_exceeds_timeout():
+    """tasks/TASK-002/20_design.md §4.3: if the outbox task does not
+    finish within `OUTBOX_SHUTDOWN_TIMEOUT_SECONDS` after `stop_event.set()`
+    (e.g. it is stuck awaiting a slow Kafka call), shutdown must cancel it
+    rather than hang the whole process shutdown forever."""
+    import asyncio
+
+    fake_app = _FakeApp()
+
+    async def _never_finishing_outbox_publisher(*_args, **_kwargs):
+        await asyncio.Event().wait()  # never resolves on its own
+
+    with patch.object(main_module, "ObjectStorage") as mock_storage_cls, patch.object(
+        main_module, "engine"
+    ) as mock_engine, patch.object(
+        main_module, "OUTBOX_SHUTDOWN_TIMEOUT_SECONDS", 0.02
+    ), patch.object(
+        main_module, "run_outbox_publisher", side_effect=_never_finishing_outbox_publisher
+    ), patch.object(
+        main_module, "KafkaEventProducer"
+    ) as mock_producer_cls:
+        mock_storage_cls.return_value = MagicMock()
+        conn = AsyncMock()
+        mock_engine.connect.return_value.__aenter__.return_value = conn
+        mock_engine.connect.return_value.__aexit__.return_value = False
+        mock_engine.dispose = AsyncMock()
+
+        fake_producer = AsyncMock()
+        mock_producer_cls.return_value = fake_producer
+
+        async with lifespan(fake_app):
+            pass
+
+        # Must have completed shutdown (did not hang) and cleaned up.
+        assert fake_app.state.outbox_task.cancelled() or fake_app.state.outbox_task.done()
+        fake_producer.stop.assert_awaited_once()
+        mock_engine.dispose.assert_awaited_once()
+
+
+async def test_lifespan_swallows_producer_stop_failure_and_still_disposes_engine():
+    """A failure in `producer.stop()` must be logged and swallowed - it
+    must not prevent `engine.dispose()` from running (constitution.md
+    §3.2 graceful shutdown order must complete regardless)."""
+    fake_app = _FakeApp()
+
+    with patch.object(main_module, "ObjectStorage") as mock_storage_cls, patch.object(
+        main_module, "engine"
+    ) as mock_engine, patch.object(main_module, "KafkaEventProducer") as mock_producer_cls:
+        mock_storage_cls.return_value = MagicMock()
+        conn = AsyncMock()
+        mock_engine.connect.return_value.__aenter__.return_value = conn
+        mock_engine.connect.return_value.__aexit__.return_value = False
+        mock_engine.dispose = AsyncMock()
+
+        fake_producer = AsyncMock()
+        fake_producer.stop.side_effect = RuntimeError("producer already closed")
+        mock_producer_cls.return_value = fake_producer
+
+        # Must not raise despite producer.stop() failing.
+        async with lifespan(fake_app):
+            pass
+
+        fake_producer.stop.assert_awaited_once()
+        mock_engine.dispose.assert_awaited_once()

@@ -5,13 +5,33 @@ repository never creates its own session and never commits globally; the
 transaction boundary is owned by the calling layer (services/). SQL lives
 ONLY here - no other module may import `sqlalchemy.select`/execute a query
 against `Photo`.
+
+TASK-002 (tasks/TASK-002/20_design.md §5, §9): adds the worker/outbox
+methods (`claim_for_processing`, `record_attempt`, `mark_done`,
+`mark_failed`, `fetch_unpublished`, `mark_published`) and eager-loads
+`Photo.analysis` in `get_by_id`/`list` via `selectinload` - the ORM
+relationship must not be lazy-loaded from async code.
+
+`from __future__ import annotations` (below) makes all annotations in
+this module lazy strings (PEP 563), regardless of Python version. This
+is required because the class defines a method named `list` (line ~53)
+which shadows the builtin `list` inside the class namespace for every
+annotation evaluated afterwards in the class body (e.g. `-> list[Photo]`
+on `fetch_unpublished`). Without deferred evaluation, eager annotation
+resolution (the default on Python <3.14, notably the `python:3.12-slim`
+runtime image) raises `TypeError: 'function' object is not
+subscriptable` at import time - see tasks/TASK-002/60_debug.md.
 """
 
-import uuid
+from __future__ import annotations
 
-from sqlalchemy import select, update
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.errors import ConflictError
 from app.db.models import Photo, PhotoStatus
@@ -32,24 +52,137 @@ class PhotoRepository:
         return photo
 
     async def get_by_id(self, session: AsyncSession, photo_id: uuid.UUID) -> Photo | None:
-        """Fetch a photo by its primary key."""
-        result = await session.execute(select(Photo).where(Photo.photo_id == photo_id))
+        """Fetch a photo by its primary key, with its analysis result
+        (if any) eager-loaded so `photo.analysis` never triggers a lazy
+        load (design §9)."""
+        result = await session.execute(
+            select(Photo)
+            .options(selectinload(Photo.analysis))
+            .where(Photo.photo_id == photo_id)
+        )
         return result.scalar_one_or_none()
 
     async def list(self, session: AsyncSession, limit: int, offset: int) -> list[Photo]:
-        """List photos ordered by most recently created first."""
+        """List photos ordered by most recently created first, with each
+        photo's analysis result eager-loaded (design §9)."""
         result = await session.execute(
-            select(Photo).order_by(Photo.created_at.desc()).limit(limit).offset(offset)
+            select(Photo)
+            .options(selectinload(Photo.analysis))
+            .order_by(Photo.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
         return list(result.scalars().all())
 
     async def update_status(
         self, session: AsyncSession, photo_id: uuid.UUID, status: PhotoStatus
     ) -> None:
-        """Update a photo's status. Commit is the caller's responsibility.
-
-        For future use by the Kafka result consumer (TASK-002/TASK-003).
-        """
+        """Update a photo's status. Commit is the caller's responsibility."""
         await session.execute(
             update(Photo).where(Photo.photo_id == photo_id).values(status=status)
         )
+
+    async def claim_for_processing(self, session: AsyncSession, photo_id: uuid.UUID) -> int:
+        """Atomically transition `pending` -> `processing`.
+
+        ЗАФИКСИРОВАНО (tasks/TASK-002/20_design.md §5.3, §12): the
+        predicate `WHERE photo_id=:id AND status='pending'` must not
+        change. Returns the number of rows updated: 1 = this worker won
+        the claim, 0 = the photo is already claimed or terminal
+        (duplicate Kafka delivery / rebalance replay) - caller must skip.
+        """
+        result = await session.execute(
+            update(Photo)
+            .where(Photo.photo_id == photo_id, Photo.status == PhotoStatus.pending)
+            .values(status=PhotoStatus.processing)
+        )
+        return result.rowcount
+
+    async def record_attempt(
+        self,
+        session: AsyncSession,
+        photo_id: uuid.UUID,
+        attempts: int,
+        error_code: str,
+        error_message: str,
+    ) -> None:
+        """Persist progress after a failed analyzer attempt (design §5.3
+        step 2) - so `attempts`/`last_error_*` reflect reality even if the
+        worker crashes before a terminal decision is reached."""
+        await session.execute(
+            update(Photo)
+            .where(Photo.photo_id == photo_id)
+            .values(
+                attempts=attempts, last_error_code=error_code, last_error_message=error_message
+            )
+        )
+
+    async def mark_done(self, session: AsyncSession, photo_id: uuid.UUID, attempts: int) -> None:
+        """Terminal success: `status='done'` (design §5.3 step 3).
+
+        Review-1 fix (tasks/TASK-002/40_review-1.md M3): also clears
+        `last_error_code`/`last_error_message` - a photo that failed on
+        attempt 1 (retryable) and then succeeded on attempt 2 would
+        otherwise end up `status='done'` while still carrying the stale
+        error from the earlier attempt, which is misleading when
+        inspecting the row.
+        """
+        await session.execute(
+            update(Photo)
+            .where(Photo.photo_id == photo_id)
+            .values(
+                status=PhotoStatus.done,
+                attempts=attempts,
+                last_error_code=None,
+                last_error_message=None,
+            )
+        )
+
+    async def mark_failed(
+        self,
+        session: AsyncSession,
+        photo_id: uuid.UUID,
+        error_code: str,
+        error_message: str,
+        attempts: int,
+    ) -> None:
+        """Terminal failure: `status='failed'` + `last_error_*` (design
+        §5.3 step 3)."""
+        await session.execute(
+            update(Photo)
+            .where(Photo.photo_id == photo_id)
+            .values(
+                status=PhotoStatus.failed,
+                last_error_code=error_code,
+                last_error_message=error_message,
+                attempts=attempts,
+            )
+        )
+
+    async def fetch_unpublished(self, session: AsyncSession, limit: int) -> list[Photo]:
+        """Outbox poll: rows still `publish_status='not_sent'` (design §4.2)."""
+        result = await session.execute(
+            select(Photo)
+            .where(Photo.publish_status == "not_sent")
+            .order_by(Photo.created_at)
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def mark_published(self, session: AsyncSession, photo_id: uuid.UUID) -> None:
+        """Outbox success: `publish_status='sent'` + `published_at=now()`
+        (design §4.2)."""
+        await session.execute(
+            update(Photo)
+            .where(Photo.photo_id == photo_id)
+            .values(publish_status="sent", published_at=datetime.now(timezone.utc))
+        )
+
+    async def count_pending(self, session: AsyncSession) -> int:
+        """`SELECT count(*) WHERE status='pending'` - backs the
+        `photos_pending` gauge, refreshed on every `/metrics` scrape
+        (design §8.4)."""
+        result = await session.execute(
+            select(func.count()).select_from(Photo).where(Photo.status == PhotoStatus.pending)
+        )
+        return result.scalar_one()

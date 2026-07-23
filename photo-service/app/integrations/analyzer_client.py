@@ -1,37 +1,105 @@
-"""Analyzer integration stub.
+"""gRPC client for the (external, stubbed in dev) Analyzer Service.
 
-The actual photo analysis is performed by an external Analyzer Service,
-consumed asynchronously via Kafka (`photos-to-analyze` topic, see
-constitution.md §2.4). Kafka is entirely out of scope for TASK-001 (no
-producer/consumer configured here, no client instantiated, no import of
-this module by any other module yet).
+Real invocation path for TASK-002 (tasks/TASK-002/20_design.md §7.2):
+the worker (`app/worker/`) calls `AnalyzerGrpcClient.analyze()` for every
+`photo.analysis.requested` Kafka message it claims. The channel is created
+once at worker startup and closed on graceful shutdown - it is NOT
+per-message.
 
-The gRPC-shaped contract this stub documents is defined in
-`protos/analyzer.proto` (`PhotoAnalyzer.AnalyzePhoto`); TASK-001
-deliberately does NOT generate Python stubs from it (no `grpcio-tools`/
-`protobuf` dependency added - see tasks/TASK-001/20_design.md §9). Actual
-analyzer invocation happens over Kafka, not a direct gRPC call, so this
-class only documents the request/response shape for future TASK-002 work.
-
-TODO(TASK-002): implement a Kafka producer wrapper here, e.g.:
-
-    async def request_analysis(photo_id: str, object_key: str,
-                                trace_id: str) -> None:
-        \"\"\"Publish a message to `photos-to-analyze` (key=photo_id).\"\"\"
-        ...
+`classify_grpc_error` implements the retry/no-retry table from design
+§5.4. It is a pure function (no I/O) so it can be unit-tested against
+every gRPC status code without a running server.
 """
 
+import enum
+import logging
 
-class AnalyzerClient:
-    """Documented placeholder for the future analyzer integration.
+import grpc
 
-    Mirrors `protos/analyzer.proto::PhotoAnalyzer.AnalyzePhoto`. Not wired
-    into any request path in TASK-001.
-    """
+from app.grpc_gen import analyzer_pb2, analyzer_pb2_grpc
 
-    async def analyze_photo(self, photo_id: str, object_key: str) -> None:
-        """TODO(TASK-002): publish to Kafka `photos-to-analyze` instead of a
-        direct RPC call. Raises until implemented so an accidental call
-        cannot silently no-op.
+logger = logging.getLogger(__name__)
+
+MAX_ERROR_MESSAGE_LENGTH = 500  # constitution.md §3.3: never log/store unbounded payloads
+
+# gRPC statuses that indicate a transient condition worth retrying.
+_RETRYABLE_GRPC_CODES = frozenset(
+    {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+        grpc.StatusCode.RESOURCE_EXHAUSTED,
+        grpc.StatusCode.ABORTED,
+        grpc.StatusCode.INTERNAL,
+    }
+)
+
+
+class RetryDecision(str, enum.Enum):
+    RETRY = "retry"
+    NO_RETRY = "no_retry"
+
+
+class AnalyzerGrpcClient:
+    """Thin async wrapper around the generated `PhotoAnalyzerStub`."""
+
+    def __init__(self, addr: str, timeout: float) -> None:
+        self._addr = addr
+        self._timeout = timeout
+        self._channel = grpc.aio.insecure_channel(addr)
+        self._stub = analyzer_pb2_grpc.PhotoAnalyzerStub(self._channel)
+
+    async def analyze(
+        self, photo_id: str, object_key: str
+    ) -> analyzer_pb2.AnalyzePhotoResponse:
+        """Call `PhotoAnalyzer.AnalyzePhoto`. Raises on any RPC failure -
+        callers (AnalysisProcessor) classify the exception via
+        `classify_grpc_error`.
         """
-        raise NotImplementedError("AnalyzerClient.analyze_photo lands in TASK-002")
+        request = analyzer_pb2.AnalyzePhotoRequest(photo_id=photo_id, object_key=object_key)
+        return await self._stub.AnalyzePhoto(request, timeout=self._timeout)
+
+    async def close(self) -> None:
+        await self._channel.close()
+
+
+def classify_grpc_error(exc: Exception) -> RetryDecision:
+    """Classify an exception raised by `AnalyzerGrpcClient.analyze()` (or
+    the `asyncio.timeout()` wrapper around it) into retry/no-retry, per
+    tasks/TASK-002/20_design.md §5.4.
+
+    - Transient gRPC statuses (UNAVAILABLE, DEADLINE_EXCEEDED,
+      RESOURCE_EXHAUSTED, ABORTED, INTERNAL) and `TimeoutError` -> RETRY.
+    - Permanent gRPC statuses (INVALID_ARGUMENT, NOT_FOUND,
+      FAILED_PRECONDITION, UNIMPLEMENTED, PERMISSION_DENIED,
+      UNAUTHENTICATED, OUT_OF_RANGE) -> NO_RETRY.
+    - Anything else (unexpected) -> NO_RETRY (fail-safe: never retry an
+      error class we don't understand, to avoid an infinite/looping retry).
+    """
+    if isinstance(exc, TimeoutError):
+        return RetryDecision.RETRY
+
+    if isinstance(exc, grpc.aio.AioRpcError):
+        if exc.code() in _RETRYABLE_GRPC_CODES:
+            return RetryDecision.RETRY
+        return RetryDecision.NO_RETRY
+
+    return RetryDecision.NO_RETRY
+
+
+def error_code_from_exception(exc: Exception) -> str:
+    """Best-effort short code for `photos.last_error_code` (design §5.4)."""
+    if isinstance(exc, TimeoutError):
+        return "TIMEOUT"
+    if isinstance(exc, grpc.aio.AioRpcError):
+        return exc.code().name
+    return "UNKNOWN"
+
+
+def truncate_error_message(message: str, limit: int = MAX_ERROR_MESSAGE_LENGTH) -> str:
+    """Truncate an error message for `photos.last_error_message` - never
+    store unbounded text (constitution.md §3.3), and this only ever
+    carries the exception's `str()`, not file contents.
+    """
+    if len(message) <= limit:
+        return message
+    return message[:limit]

@@ -1,0 +1,19 @@
+# TASK-002 (tasks/TASK-002/20_design.md §9.2): tells Grafana to auto-load
+# every dashboard JSON found under `options.path`. This provider config
+# file itself is mounted to /etc/grafana/provisioning/dashboards/provider.yml
+# (fixed location Grafana always scans for *.yml provisioning); the actual
+# dashboard JSON (grafana/dashboards/photo-service.json) is mounted
+# separately to /var/lib/grafana/dashboards - see the `grafana` service
+# volumes in docker-compose.yml.
+apiVersion: 1
+
+providers:
+  - name: photo-service
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
