@@ -1,0 +1,15 @@
+// TASK-003 B2 (design §8.2): rendered into config.js by docker-entrypoint.sh
+// at container start (envsubst) - NOT baked in at image build time. This is
+// the one place the web UI learns the API's address; it must stay in sync
+// with wherever the api service is actually reachable (docker-compose:
+// http://localhost:8000, server: http://45.132.19.101:51101, k8s: the
+// ConfigMap value).
+window.APP_CONFIG = {
+  apiBaseUrl: "${API_BASE_URL}",
+  // TASK-003 design §3.6/§8.3: MUST match `SHARPNESS_THRESHOLD` in
+  // app/services/batch_service.py. If the two values ever disagree, the
+  // backend is the source of truth (the UI verdict is cosmetic; the actual
+  // "best photo" choice is always computed server-side).
+  sharpnessThreshold: ${SHARPNESS_THRESHOLD},
+  pollIntervalMs: ${POLL_INTERVAL_MS}
+};

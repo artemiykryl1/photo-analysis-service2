@@ -16,6 +16,7 @@ remain synchronous here - callers running inside async request handlers
 import io
 import logging
 
+import urllib3.exceptions
 from minio import Minio
 from minio.error import S3Error
 
@@ -23,6 +24,27 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, StorageUnavailable
 
 logger = logging.getLogger(__name__)
+
+# `S3Error` is only raised once MinIO has already accepted a TCP connection
+# and answered with an S3-protocol-level error (e.g. `NoSuchKey`). When
+# MinIO itself is unreachable (pod restarting, connection refused, DNS
+# failure, read timeout), the underlying `urllib3`-based transport used by
+# the `minio` SDK never gets that far and instead raises one of these
+# (TASK-003 review-1 BLOCKING-1: proven by forcing a connection to a closed
+# port, which raised `urllib3.exceptions.MaxRetryError` and was previously
+# left unhandled, falling through as an unclassified `NO_RETRY`/`UNKNOWN`
+# error instead of the retryable `StorageUnavailable` design A2 requires).
+_TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
+    urllib3.exceptions.HTTPError,
+    ConnectionError,
+)
+# Deliberately NOT bare `OSError`: builtin `TimeoutError` is also an
+# `OSError` subclass, and a gRPC-side/asyncio timeout must keep surfacing as
+# `TIMEOUT` (see `analysis_processor.py`/`analyzer_client.py`), not get
+# reclassified as a storage failure just because it happens to share a base
+# class. `ConnectionError` (`ConnectionRefusedError`/`ConnectionResetError`/
+# ...) is unrelated to `TimeoutError` in the builtin hierarchy, so it is
+# safe and specific enough to include here.
 
 
 def _validate_object_name(object_name: str) -> None:
@@ -62,6 +84,9 @@ class ObjectStorage:
         except S3Error as exc:
             logger.error("failed to ensure MinIO bucket exists: %s", exc)
             raise StorageUnavailable("MinIO is unreachable") from exc
+        except _TRANSPORT_ERRORS as exc:
+            logger.error("MinIO unreachable while ensuring bucket exists: %s", exc)
+            raise StorageUnavailable("MinIO is unreachable") from exc
 
     def save_file(
         self, object_name: str, data: bytes, length: int, content_type: str
@@ -84,6 +109,9 @@ class ObjectStorage:
         except S3Error as exc:
             logger.error("failed to save object to MinIO: %s", exc)
             raise StorageUnavailable("MinIO is unreachable") from exc
+        except _TRANSPORT_ERRORS as exc:
+            logger.error("MinIO unreachable while saving object: %s", exc)
+            raise StorageUnavailable("MinIO is unreachable") from exc
         return f"{self._bucket}/{object_name}"
 
     def get_file(self, object_name: str) -> bytes:
@@ -99,6 +127,14 @@ class ObjectStorage:
             if exc.code == "NoSuchKey":
                 raise NotFoundError("Object not found") from exc
             logger.error("failed to read object from MinIO: %s", exc)
+            raise StorageUnavailable("MinIO is unreachable") from exc
+        except _TRANSPORT_ERRORS as exc:
+            # MinIO did not answer at all (connection refused / DNS failure /
+            # read timeout) - the SDK raises `urllib3.exceptions.MaxRetryError`
+            # or similar here, never an `S3Error`. This is exactly the
+            # "MinIO is unreachable" case TASK-003 A2 requires to be
+            # retryable, not a permanent `UNKNOWN` failure.
+            logger.error("MinIO unreachable while reading object: %s", exc)
             raise StorageUnavailable("MinIO is unreachable") from exc
 
     def delete_file(self, object_name: str) -> None:

@@ -23,6 +23,7 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging
 from app.db.session import engine
 from app.integrations.analyzer_client import AnalyzerGrpcClient
+from app.integrations.storage import ObjectStorage
 from app.repositories.analysis_result_repository import AnalysisResultRepository
 from app.repositories.batch_repository import BatchRepository
 from app.repositories.photo_repository import PhotoRepository
@@ -57,12 +58,20 @@ async def _run() -> None:
     logger.info("worker metrics server started", extra={"port": settings.WORKER_METRICS_PORT})
 
     analyzer = AnalyzerGrpcClient(settings.ANALYZER_GRPC_ADDR, settings.ANALYZER_GRPC_TIMEOUT)
+    # TASK-003 A2/A9 (tasks/TASK-003/20_design.md §5.1): the worker now
+    # reads the photo's bytes from MinIO before calling the analyzer.
+    # `ensure_bucket()` is deliberately NOT called here - the bucket is
+    # created once by the API at its own startup (app/main.py lifespan);
+    # the worker only ever reads, so it should not need (or be granted)
+    # bucket-creation permissions.
+    storage = ObjectStorage(settings)
     processor = AnalysisProcessor(
         photo_repository=PhotoRepository(),
         analysis_repository=AnalysisResultRepository(),
         analyzer=analyzer,
         settings=settings,
         batch_repository=BatchRepository(),
+        storage=storage,
     )
 
     consumer = AIOKafkaConsumer(

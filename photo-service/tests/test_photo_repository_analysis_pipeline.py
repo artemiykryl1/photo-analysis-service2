@@ -143,6 +143,31 @@ class TestFetchUnpublished:
         assert "ORDER BY photos.created_at" in compiled
         assert "LIMIT 50" in compiled
 
+    async def test_locks_rows_with_for_update_skip_locked(self):
+        """TASK-003 review-1 MAJOR-1: with `api replicas: 2` (k8s), two
+        `run_outbox_publisher` instances poll concurrently - without
+        `FOR UPDATE SKIP LOCKED` they would select and double-publish the
+        same rows to Kafka. Locked via a Postgres-dialect compile, since the
+        generic/default SQL compiler renders `FOR UPDATE` unconditionally
+        without the `SKIP LOCKED` suffix."""
+        from sqlalchemy.dialects import postgresql
+
+        session = _mock_session()
+        result_mock = MagicMock()
+        result_mock.scalars.return_value.all.return_value = []
+        session.execute.return_value = result_mock
+        repo = PhotoRepository()
+
+        await repo.fetch_unpublished(session, limit=50)
+
+        stmt = session.execute.call_args.args[0]
+        compiled = str(
+            stmt.compile(
+                dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+            )
+        )
+        assert "FOR UPDATE SKIP LOCKED" in compiled
+
     async def test_returns_rows_from_scalars_all(self):
         session = _mock_session()
         rows = [MagicMock(), MagicMock()]

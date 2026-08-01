@@ -19,6 +19,7 @@ import pytest
 from app.integrations.analyzer_client import (
     MAX_ERROR_MESSAGE_LENGTH,
     AnalyzerGrpcClient,
+    AnalyzerMessageTooLarge,
     RetryDecision,
     classify_grpc_error,
     error_code_from_exception,
@@ -26,12 +27,12 @@ from app.integrations.analyzer_client import (
 )
 
 
-def _rpc_error(code: grpc.StatusCode) -> grpc.aio.AioRpcError:
+def _rpc_error(code: grpc.StatusCode, details: str | None = None) -> grpc.aio.AioRpcError:
     return grpc.aio.AioRpcError(
         code=code,
         initial_metadata=grpc.aio.Metadata(),
         trailing_metadata=grpc.aio.Metadata(),
-        details=f"{code.name} from stub",
+        details=details if details is not None else f"{code.name} from stub",
     )
 
 
@@ -74,6 +75,49 @@ class TestClassifyGrpcErrorNoRetry:
 
     def test_generic_runtime_error_is_no_retry(self):
         assert classify_grpc_error(RuntimeError("boom")) == RetryDecision.NO_RETRY
+
+
+class TestClassifyGrpcErrorMessageTooLarge:
+    """TASK-003 A4/A6 (tasks/TASK-003/20_design.md §4.1/§4.2): a
+    RESOURCE_EXHAUSTED whose detail says the message was too large is a
+    PERMANENT error (NO_RETRY, MESSAGE_TOO_LARGE) - distinct from the same
+    status code used for transient analyzer throttling (still RETRY)."""
+
+    def test_resource_exhausted_with_server_side_marker_is_no_retry(self):
+        exc = _rpc_error(
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            details="Received message larger than max (6687802 vs. 4194304)",
+        )
+        assert classify_grpc_error(exc) == RetryDecision.NO_RETRY
+        assert error_code_from_exception(exc) == "MESSAGE_TOO_LARGE"
+
+    def test_resource_exhausted_with_client_side_marker_is_no_retry(self):
+        exc = _rpc_error(
+            grpc.StatusCode.RESOURCE_EXHAUSTED, details="Sent message larger than max"
+        )
+        assert classify_grpc_error(exc) == RetryDecision.NO_RETRY
+        assert error_code_from_exception(exc) == "MESSAGE_TOO_LARGE"
+
+    def test_marker_match_is_case_insensitive(self):
+        exc = _rpc_error(
+            grpc.StatusCode.RESOURCE_EXHAUSTED, details="RECEIVED MESSAGE LARGER THAN MAX"
+        )
+        assert classify_grpc_error(exc) == RetryDecision.NO_RETRY
+        assert error_code_from_exception(exc) == "MESSAGE_TOO_LARGE"
+
+    def test_resource_exhausted_without_marker_is_still_retryable(self):
+        """The shared analyzer throttling under load also raises
+        RESOURCE_EXHAUSTED, but without size wording - must remain RETRY."""
+        exc = _rpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED, details="rate limited, try later")
+        assert classify_grpc_error(exc) == RetryDecision.RETRY
+        assert error_code_from_exception(exc) == "RESOURCE_EXHAUSTED"
+
+    def test_analyzer_message_too_large_exception_is_no_retry(self):
+        """The preventive size check (`AnalysisProcessor`, before ever
+        calling the analyzer) raises this directly - no RPC involved."""
+        exc = AnalyzerMessageTooLarge(sent_bytes=5_000_000, limit=4_194_304)
+        assert classify_grpc_error(exc) == RetryDecision.NO_RETRY
+        assert error_code_from_exception(exc) == "MESSAGE_TOO_LARGE"
 
 
 class TestErrorCodeFromException:
@@ -127,7 +171,9 @@ class TestAnalyzerGrpcClient:
             mock_stub_cls.return_value = stub
 
             client = AnalyzerGrpcClient("addr:50051", timeout=7.5)
-            result = await client.analyze("photo-1", "photos/photo-1/original.jpg")
+            result = await client.analyze(
+                "photo-1", "photos/photo-1/original.jpg", b"fake-image-bytes"
+            )
 
             assert result == "fake-response"
             stub.AnalyzePhoto.assert_awaited_once()
@@ -135,6 +181,7 @@ class TestAnalyzerGrpcClient:
             request = call.args[0]
             assert request.photo_id == "photo-1"
             assert request.object_key == "photos/photo-1/original.jpg"
+            assert request.image_bytes == b"fake-image-bytes"
             assert call.kwargs["timeout"] == 7.5
 
     async def test_close_closes_the_channel(self):

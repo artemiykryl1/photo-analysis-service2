@@ -65,14 +65,19 @@ class TestRunWiring:
     async def test_run_starts_metrics_server_consumer_and_disposes_on_exit(self):
         with patch.object(worker_main_module, "start_http_server") as mock_metrics_server, \
              patch.object(worker_main_module, "AnalyzerGrpcClient") as mock_analyzer_cls, \
+             patch.object(worker_main_module, "ObjectStorage") as mock_storage_cls, \
              patch.object(worker_main_module, "AIOKafkaConsumer") as mock_consumer_cls, \
              patch.object(worker_main_module, "consume_loop", new_callable=AsyncMock) as mock_consume_loop, \
+             patch.object(worker_main_module, "AnalysisProcessor") as mock_processor_cls, \
              patch.object(worker_main_module, "engine") as mock_engine, \
              patch.object(worker_main_module, "_install_shutdown_handlers") as mock_install_handlers:
 
             fake_analyzer = MagicMock()
             fake_analyzer.close = AsyncMock()
             mock_analyzer_cls.return_value = fake_analyzer
+
+            fake_storage = MagicMock()
+            mock_storage_cls.return_value = fake_storage
 
             fake_consumer = AsyncMock()
             mock_consumer_cls.return_value = fake_consumer
@@ -90,11 +95,19 @@ class TestRunWiring:
             fake_analyzer.close.assert_awaited_once()
             mock_engine.dispose.assert_awaited_once()
 
+            # TASK-003 A9 (design §5.1): the worker constructs an
+            # `ObjectStorage` and passes it through to `AnalysisProcessor`
+            # as the required `storage=` keyword argument.
+            mock_storage_cls.assert_called_once()
+            mock_processor_cls.assert_called_once()
+            assert mock_processor_cls.call_args.kwargs["storage"] is fake_storage
+
     async def test_teardown_still_runs_when_consume_loop_raises(self):
         """The `finally` block (design §5.6) must close the consumer/
         analyzer/engine even if `consume_loop` propagates an exception."""
         with patch.object(worker_main_module, "start_http_server"), \
              patch.object(worker_main_module, "AnalyzerGrpcClient") as mock_analyzer_cls, \
+             patch.object(worker_main_module, "ObjectStorage"), \
              patch.object(worker_main_module, "AIOKafkaConsumer") as mock_consumer_cls, \
              patch.object(
                  worker_main_module, "consume_loop", new_callable=AsyncMock
@@ -126,6 +139,7 @@ class TestRunWiring:
     async def test_consumer_constructed_with_configured_topic_and_group(self):
         with patch.object(worker_main_module, "start_http_server"), \
              patch.object(worker_main_module, "AnalyzerGrpcClient") as mock_analyzer_cls, \
+             patch.object(worker_main_module, "ObjectStorage"), \
              patch.object(worker_main_module, "AIOKafkaConsumer") as mock_consumer_cls, \
              patch.object(worker_main_module, "consume_loop", new_callable=AsyncMock), \
              patch.object(worker_main_module, "engine") as mock_engine, \

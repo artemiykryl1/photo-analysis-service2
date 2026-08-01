@@ -7,7 +7,8 @@ be tested independently of `aiokafka`.
 
 Must not know about Kafka (`aiokafka`) or ASGI - callers own the
 `AsyncSession` and the message payload; this class only orchestrates
-`repositories/` + the gRPC client.
+`repositories/` + the gRPC client (+ MinIO reads + image preparation, as of
+TASK-003).
 
 TASK-002.1 (tasks/TASK-002.1/20_design.md F3): after every terminal write
 (a duplicate-skip, a `done`, or a `failed`), this class also checks
@@ -19,6 +20,16 @@ from `app.services.batch_service` (not `app.services.photo_service`) is
 deliberate - `batch_service` does not import `photo_service`, so this
 module's import graph never pulls in `app.integrations.metrics_api`
 (API-only metrics) - see the F4 import-hygiene invariant.
+
+TASK-003 A2/A8/A9 (tasks/TASK-003/20_design.md §5): the worker now reads
+the photo's bytes from MinIO and downscales them (if needed) BEFORE
+calling the real analyzer, which requires the actual `image_bytes` and
+hard-caps its gRPC message at 4 MiB (spike A3,
+tasks/TASK-003/05_spike_analyzer.md). The download+prepare step happens
+INSIDE the retry loop (after the claim, per §5.2 - no point downloading up
+to 50 MB just to discard it in the skip branch) but is cached across
+attempts (`if prepared is None`) so a transient MinIO/gRPC failure never
+re-downloads or re-encodes bytes it already successfully prepared.
 """
 
 import asyncio
@@ -26,37 +37,64 @@ import logging
 import time
 import uuid
 
+import anyio.to_thread
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.db.models import PhotoStatus
 from app.integrations.analyzer_client import (
     AnalyzerGrpcClient,
+    AnalyzerMessageTooLarge,
     RetryDecision,
-    classify_grpc_error,
-    error_code_from_exception,
     truncate_error_message,
 )
 from app.integrations.metrics_worker import (
     analyzer_grpc_errors_total,
+    analyzer_image_downscaled_total,
+    analyzer_image_prepared_bytes,
     photo_analysis_completed_total,
     photo_analysis_duration_seconds,
     photo_analysis_failed_total,
     photo_analysis_started_total,
+    storage_read_errors_total,
     worker_messages_processed_total,
 )
+from app.integrations.storage import ObjectStorage
 from app.repositories.analysis_result_repository import AnalysisResultRepository
 from app.repositories.batch_repository import BatchRepository
 from app.repositories.photo_repository import PhotoRepository
+from app.services.analysis_errors import classify_error
 from app.services.batch_service import select_best_photo
+from app.services.image_prep import PreparedImage, prepare_for_analysis
 
 logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = frozenset({PhotoStatus.done, PhotoStatus.failed})
 
+# TASK-003 A7/D3 (design §4.1): deliberately generous overhead estimate for
+# `photo_id` + `object_key` + protobuf framing (< 150 bytes measured) - the
+# preventive check errs on the side of catching a too-large payload before
+# ever calling the analyzer, rather than trimming this margin to the bone.
+_MESSAGE_OVERHEAD_BYTES = 1024
+
+# TASK-003 A8/§12 (design "вежливость к общему анализатору"): error codes
+# after which the worker throttles itself before returning, so a lengthy
+# analyzer outage doesn't turn into a hot-loop against a shared external
+# service. Deliberately narrow (not e.g. RESOURCE_EXHAUSTED, which already
+# gets its own retry loop with backoff) - this cooldown is specifically for
+# "the analyzer seems to be down/unreachable", not "a single call was slow".
+_COOLDOWN_ERROR_CODES = frozenset({"UNAVAILABLE", "DEADLINE_EXCEEDED"})
+
+# `last_error_code`s produced by the storage (MinIO read) path -
+# `app.services.analysis_errors.classify_error` - as opposed to the
+# analyzer/gRPC path. Used only to route the failure to the right Prometheus
+# counter (design A-8 step 5); the retry decision itself is unaffected.
+_STORAGE_ERROR_CODES = frozenset({"OBJECT_NOT_FOUND", "STORAGE_UNAVAILABLE"})
+
 
 class AnalysisProcessor:
-    """Claim -> analyze (with bounded retry) -> persist, for one photo."""
+    """Claim -> prepare image -> analyze (with bounded retry) -> persist,
+    for one photo."""
 
     def __init__(
         self,
@@ -65,14 +103,28 @@ class AnalysisProcessor:
         analyzer: AnalyzerGrpcClient,
         settings: Settings,
         batch_repository: BatchRepository | None = None,
+        *,
+        storage: ObjectStorage,
     ) -> None:
         self._photos = photo_repository
         self._analysis = analysis_repository
         self._analyzer = analyzer
+        self._settings = settings
         self._max_attempts = settings.WORKER_MAX_ATTEMPTS
         self._backoff_base = settings.RETRY_BACKOFF_BASE_SECONDS
         self._grpc_timeout = settings.ANALYZER_GRPC_TIMEOUT
         self._batches = batch_repository or BatchRepository()
+        # TASK-003 A9/D4 (design §5.1): `storage` is a required keyword-only
+        # argument on purpose (not `| None = None`) - a half-configured
+        # processor that silently skipped reading the photo's bytes would
+        # be a silent production outage, not a graceful degradation. Any
+        # caller (including existing test fixtures) that omits it now gets
+        # an immediate, explicit `TypeError` instead.
+        self._storage = storage
+        self._storage_read_timeout = settings.STORAGE_READ_TIMEOUT_SECONDS
+        self._image_prep_timeout = settings.IMAGE_PREP_TIMEOUT_SECONDS
+        self._max_message_bytes = settings.ANALYZER_MAX_MESSAGE_BYTES
+        self._cooldown_seconds = settings.ANALYZER_UNAVAILABLE_COOLDOWN_SECONDS
 
     async def _maybe_complete_batch(self, session: AsyncSession, photo_id: uuid.UUID) -> None:
         """If `photo_id` belongs to a batch and every photo in that batch
@@ -105,9 +157,50 @@ class AnalysisProcessor:
                 },
             )
 
+    async def _prepare_image(self, photo_id: str, object_key: str) -> PreparedImage:
+        """Download the photo's bytes from MinIO and prepare them for the
+        analyzer (TASK-003 A2/A5/D1, design §5.2-§5.3). Raises
+        `NotFoundError`/`StorageUnavailable` (MinIO), `ImageDecodeError`/
+        `ImageTooLargeError` (Pillow), or `AnalyzerMessageTooLarge` (the
+        preventive size check) - all classified by
+        `app.services.analysis_errors.classify_error` in the caller.
+        """
+        async with asyncio.timeout(self._storage_read_timeout):
+            raw = await anyio.to_thread.run_sync(self._storage.get_file, object_key)
+        original_bytes = len(raw)
+
+        async with asyncio.timeout(self._image_prep_timeout):
+            prepared = await anyio.to_thread.run_sync(
+                prepare_for_analysis, raw, self._settings
+            )
+        raw = None  # release the original bytes as soon as we have the prepared copy
+
+        if len(prepared.data) + _MESSAGE_OVERHEAD_BYTES > self._max_message_bytes:
+            raise AnalyzerMessageTooLarge(len(prepared.data), self._max_message_bytes)
+
+        # constitution.md §3.3: log sizes/dimensions, never the object_key
+        # in full or any file content.
+        logger.info(
+            "image prepared",
+            extra={
+                "photo_id": photo_id,
+                "original_bytes": original_bytes,
+                "sent_bytes": len(prepared.data),
+                "downscaled": prepared.downscaled,
+                "width": prepared.width,
+                "height": prepared.height,
+            },
+        )
+        analyzer_image_prepared_bytes.observe(len(prepared.data))
+        if prepared.downscaled:
+            analyzer_image_downscaled_total.inc()
+
+        return prepared
+
     async def process(self, session: AsyncSession, photo_id: str, object_key: str) -> None:
-        """tasks/TASK-002/20_design.md §5.3. `session` must be fresh (one
-        session per message, opened/closed by the caller - see §5.2)."""
+        """tasks/TASK-002/20_design.md §5.3, extended by TASK-003 A8
+        (tasks/TASK-003/20_design.md §5.2). `session` must be fresh (one
+        session per message, opened/closed by the caller)."""
         photo_uuid = uuid.UUID(photo_id)
 
         # Step 1: atomic claim (ЗАФИКСИРОВАНО predicate - see photo_repository).
@@ -146,20 +239,33 @@ class AnalysisProcessor:
         last_message = ""
         decision = RetryDecision.NO_RETRY
         response = None
+        prepared: PreparedImage | None = None
 
         for attempt in range(1, self._max_attempts + 1):
             attempts = attempt
             try:
+                if prepared is None:
+                    # TASK-003 A2/D4 (design §5.2): download + prepare ONCE
+                    # per message, cached across retry attempts - a
+                    # transient MinIO or gRPC failure retries the same
+                    # already-prepared bytes instead of re-downloading/
+                    # re-encoding on every attempt.
+                    prepared = await self._prepare_image(photo_id, object_key)
+
                 async with asyncio.timeout(self._grpc_timeout):
-                    response = await self._analyzer.analyze(photo_id, object_key)
+                    response = await self._analyzer.analyze(
+                        photo_id, object_key, prepared.data
+                    )
                 break
             except Exception as exc:  # noqa: BLE001 - classified immediately below, never swallowed
-                decision = classify_grpc_error(exc)
-                last_code = error_code_from_exception(exc)
+                decision, last_code = classify_error(exc)
                 last_message = truncate_error_message(str(exc))
-                analyzer_grpc_errors_total.labels(code=last_code).inc()
+                if last_code in _STORAGE_ERROR_CODES:
+                    storage_read_errors_total.labels(code=last_code).inc()
+                else:
+                    analyzer_grpc_errors_total.labels(code=last_code).inc()
                 logger.warning(
-                    "analyzer gRPC call failed",
+                    "analysis attempt failed",
                     extra={
                         "photo_id": photo_id,
                         "attempt": attempt,
@@ -181,6 +287,20 @@ class AnalysisProcessor:
         duration_seconds = time.monotonic() - t0
         photo_analysis_duration_seconds.observe(duration_seconds)
 
+        if response is None and last_code in _COOLDOWN_ERROR_CODES:
+            # TASK-003 A8/§12 (design "вежливость к общему анализатору"):
+            # throttle before returning when the analyzer appears to be
+            # down/unreachable, rather than letting the next Kafka message
+            # immediately hammer it again. `asyncio.timeout` wrapping the
+            # gRPC call already turns a hung call into `TimeoutError`
+            # (code "TIMEOUT", not in this set) well before
+            # ANALYZER_GRPC_TIMEOUT would itself act as a natural throttle.
+            logger.warning(
+                "analyzer unavailable, cooling down",
+                extra={"photo_id": photo_id, "cooldown_seconds": self._cooldown_seconds},
+            )
+            await asyncio.sleep(self._cooldown_seconds)
+
         # Step 3: terminal write (one transaction).
         if response is not None:
             await self._analysis.upsert(
@@ -190,6 +310,10 @@ class AnalysisProcessor:
                 is_blurred=response.is_blurred,
                 blur_score=response.blur_score,
                 perceptual_hash=response.perceptual_hash,
+                eyes_closed_count=response.eyes_closed_count,
+                dominant_color=response.dominant_color,
+                tags=list(response.tags),
+                model_version=response.model_version,
             )
             await self._photos.mark_done(session, photo_uuid, attempts)
             await session.commit()

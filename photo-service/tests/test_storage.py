@@ -18,6 +18,7 @@ constructor with dummy settings is safe and does not require mocking.
 from unittest.mock import MagicMock
 
 import pytest
+import urllib3.exceptions
 from minio.error import S3Error
 
 from app.core.config import Settings
@@ -34,6 +35,14 @@ def _s3_error(code: str = "InternalError") -> S3Error:
         request_id="req-1",
         host_id="host-1",
     )
+
+
+def _transport_error() -> urllib3.exceptions.MaxRetryError:
+    """The exception a real MinIO outage raises (connection refused, DNS
+    failure, read timeout) - `S3Error` requires MinIO to have already
+    answered with an S3-protocol response, which never happens here
+    (TASK-003 review-1 BLOCKING-1)."""
+    return urllib3.exceptions.MaxRetryError(pool=None, url="http://minio:9000")
 
 
 @pytest.fixture
@@ -74,6 +83,15 @@ class TestEnsureBucketIdempotency:
         with pytest.raises(StorageUnavailable):
             storage.ensure_bucket()
 
+    def test_ensure_bucket_raises_storage_unavailable_on_transport_error(self, storage):
+        """Review-1 BLOCKING-1: MinIO being unreachable (not just answering
+        with an S3 error) must also be classified as `StorageUnavailable`,
+        i.e. retryable - not left to propagate as an unhandled exception."""
+        storage._client.bucket_exists.side_effect = _transport_error()
+
+        with pytest.raises(StorageUnavailable):
+            storage.ensure_bucket()
+
     def test_ensure_bucket_calling_twice_is_idempotent(self, storage):
         """Second call sees bucket_exists=True (as if the first call created it)."""
         storage._client.bucket_exists.side_effect = [False, True]
@@ -110,6 +128,12 @@ class TestSaveFile:
         with pytest.raises(StorageUnavailable):
             storage.save_file("obj.jpg", b"x", length=1, content_type="image/jpeg")
 
+    def test_save_file_raises_storage_unavailable_on_transport_error(self, storage):
+        storage._client.put_object.side_effect = _transport_error()
+
+        with pytest.raises(StorageUnavailable):
+            storage.save_file("obj.jpg", b"x", length=1, content_type="image/jpeg")
+
 
 class TestGetFile:
     def test_get_file_delegates_to_client_get_object_and_reads_bytes(self, storage):
@@ -140,6 +164,16 @@ class TestGetFile:
 
     def test_get_file_other_s3_error_raises_storage_unavailable(self, storage):
         storage._client.get_object.side_effect = _s3_error(code="InternalError")
+
+        with pytest.raises(StorageUnavailable):
+            storage.get_file("obj.jpg")
+
+    def test_get_file_transport_error_raises_storage_unavailable(self, storage):
+        """Review-1 BLOCKING-1, proven by the reviewer against a closed port:
+        a real MinIO outage raises `urllib3.exceptions.MaxRetryError`, not
+        `S3Error` - it must map to the same retryable `StorageUnavailable`
+        as an S3-protocol-level failure, not fall through unclassified."""
+        storage._client.get_object.side_effect = _transport_error()
 
         with pytest.raises(StorageUnavailable):
             storage.get_file("obj.jpg")

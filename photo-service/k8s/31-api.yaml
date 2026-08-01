@@ -1,0 +1,93 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2/§9.6/§9.7/§9.8): the FastAPI
+# app. `replicas: 2` demonstrates horizontal scalability of the read/upload
+# path; the migration is NOT run here (see `30-migrate-job.yaml` / §9.6) -
+# the `wait-for-schema` initContainer only blocks until the Job has already
+# created `alembic_version`, it never runs `alembic upgrade head` itself.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: photo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: api
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: photo-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      initContainers:
+        # design §9.6 (C1): blocks until k8s/30-migrate-job.yaml has created
+        # `alembic_version` - `kubectl apply -f k8s/` gives no ordering
+        # guarantee between the Job and this Deployment.
+        - name: wait-for-schema
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["uv", "run", "python", "-m", "app.db.wait_for_schema"]
+          envFrom:
+            - configMapRef:
+                name: photo-config
+            - secretRef:
+                name: photo-secrets
+      containers:
+        - name: api
+          # Built locally (`docker build -t photo-service:local .`) and
+          # loaded into the kind nodes (`kind load docker-image
+          # photo-service:local --name photo`) - no external registry.
+          # `:local` tag + `IfNotPresent` is required, NOT the `latest`/
+          # `Always` default, or kubelet tries to pull from a nonexistent
+          # registry and fails with `ErrImagePull` (design §9.3, risk R10).
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: photo-config
+            - secretRef:
+                name: photo-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          # design §9.7: reuses the existing /healthz (always 200, no
+          # dependency calls) and /readyz (checks DB + MinIO) endpoints -
+          # no new endpoints were added for Kubernetes.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30
+      restartPolicy: Always

@@ -1,0 +1,206 @@
+# TASK-003 C3/C4 (tasks/TASK-003/20_design.md §9.2/§11.3), amended by
+# review-1 BLOCKING-2: `api`/`worker` run with `replicas: 2` behind plain
+# ClusterIP Services. A static-target scrape of `api:8000`/`worker:8001`
+# lands on a RANDOM replica every scrape (kube-proxy balances per TCP
+# connection), but is recorded under the SAME time series
+# (`instance="api:8000"`). Since each replica's `prometheus_client` counters
+# start independently at zero, that series alternates between two unrelated
+# monotonic sequences - Prometheus reads every drop as a counter reset, so
+# `rate()`/`increase()` (all 4 alerts in rules.yml, most dashboard panels)
+# are corrupted, silently (`up` still reports 1).
+#
+# Fix (design review-1 BLOCKING-2, Variant A): scrape pods directly via
+# `kubernetes_sd_configs` (role: pod) instead of the Service. Each replica
+# then gets its own target/series (`instance` = pod name), so counters are
+# real and monotonic per-replica; dashboard panels must aggregate across
+# replicas with `sum(...)` (see `grafana/dashboards/photo-service.json` /
+# `k8s/41-grafana.yaml`'s `photos_pending`/`analyzer_image_downscaled_total`
+# panels).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: photo-service
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 10s
+
+    rule_files:
+      - /etc/prometheus/rules.yml
+
+    scrape_configs:
+      - job_name: photo-api
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["photo-service"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: api
+          - source_labels: [__meta_kubernetes_pod_ip]
+            regex: (.+)
+            replacement: ${1}:8000
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+
+      - job_name: photo-worker
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: ["photo-service"]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: worker
+          - source_labels: [__meta_kubernetes_pod_ip]
+            regex: (.+)
+            replacement: ${1}:8001
+            target_label: __address__
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+
+  rules.yml: |
+    groups:
+      - name: photo-service
+        rules:
+          - alert: AnalysisFailureRateHigh
+            expr: rate(photo_analysis_failed_total[5m]) > 0.1
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Analysis pipeline failure rate is high"
+              description: >-
+                photo_analysis_failed_total rate has exceeded 0.1/s for 10
+                minutes - the pipeline is degrading.
+
+          - alert: AnalyzerMessageTooLarge
+            expr: increase(analyzer_grpc_errors_total{code="MESSAGE_TOO_LARGE"}[15m]) > 0
+            labels:
+              severity: warning
+            annotations:
+              summary: "Prepared image still exceeds the analyzer's message size budget"
+              description: >-
+                At least one image was rejected as MESSAGE_TOO_LARGE in the
+                last 15 minutes - re-check
+                ANALYZER_MAX_IMAGE_BYTES/ANALYZER_MAX_IMAGE_SIDE.
+
+          - alert: AnalyzerUnavailable
+            expr: increase(analyzer_grpc_errors_total{code="UNAVAILABLE"}[5m]) > 10
+            labels:
+              severity: critical
+            annotations:
+              summary: "External analyzer appears to be down"
+              description: >-
+                More than 10 UNAVAILABLE errors from the analyzer in the
+                last 5 minutes.
+
+          - alert: WorkerStalled
+            expr: >-
+              sum(increase(worker_messages_processed_total[10m])) == 0
+              and sum(photos_pending) > 0
+            labels:
+              severity: critical
+            annotations:
+              summary: "Worker consumer appears stalled"
+              description: >-
+                No messages processed in 10 minutes while photos are still
+                pending - the asyncio event loop may be wedged (design §9.7:
+                the /metrics liveness probe only proves the process is
+                alive, not that the consumer loop is progressing). Both
+                sides of the `and` are wrapped in sum() so they compare on
+                an empty label set (review-1 NB-13: worker_messages_processed_total
+                carries a `result` label and lives in job=photo-worker,
+                photos_pending is an unlabeled gauge in job=photo-api -
+                without sum() the expression's vector intersection is
+                always empty and the alert can never fire).
+---
+# review-1 BLOCKING-2 (Variant A): `kubernetes_sd_configs` above needs the
+# Prometheus pod to be allowed to list/watch pods in this namespace via the
+# Kubernetes API. Scoped to a namespaced Role/RoleBinding rather than a
+# ClusterRole/ClusterRoleBinding - `kubernetes_sd_configs` is already
+# restricted to `namespaces: {names: [photo-service]}`, so a
+# cluster-wide grant would exceed what this scrape config actually needs
+# (least privilege, same principle as the NB-8 finding on secret scoping).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: photo-service
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: prometheus-pod-reader
+  namespace: photo-service
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "endpoints", "services"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: prometheus-pod-reader
+  namespace: photo-service
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: photo-service
+roleRef:
+  kind: Role
+  name: prometheus-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: photo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: photo-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus
+          ports:
+            - containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+      restartPolicy: Always

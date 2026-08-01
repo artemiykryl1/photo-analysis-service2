@@ -1,0 +1,131 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2/§9.8/§9.9): single-broker
+# KRaft Kafka (no ZooKeeper), same image/mode as docker-compose. One
+# important difference from compose: `KAFKA_NUM_PARTITIONS: "3"` - with a
+# single partition (compose's value) a second worker replica in the same
+# consumer group would starve, so `replicas: 2` for the worker (§32-worker)
+# would be pointless here (design §9.9 "важная оговорка").
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: photo-service
+spec:
+  clusterIP: None # headless - single broker, stable DNS name "kafka"
+  # Найдено живым прогоном в kind (TASK-003): без этого флага под падал в
+  # CrashLoopBackOff с `java.net.UnknownHostException: kafka-0.kafka`.
+  # Headless-сервис по умолчанию публикует DNS-записи ТОЛЬКО для готовых
+  # подов, а KRaft-брокеру нужно разрешить собственное имя из
+  # KAFKA_CONTROLLER_QUORUM_VOTERS (`kafka-0.kafka:9093`) ещё ДО того, как
+  # он соберёт кворум и станет готовым. Классический дедлок «не готов →
+  # нет DNS → не может стать готовым». Флаг публикует адреса неготовых
+  # подов и разрывает цикл.
+  publishNotReadyAddresses: true
+  selector:
+    app: kafka
+  ports:
+    - name: broker
+      port: 9092
+      targetPort: 9092
+    - name: controller
+      port: 9093
+      targetPort: 9093
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: photo-service
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.7.0
+          ports:
+            - containerPort: 9092
+            - containerPort: 9093
+          env:
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:9092,CONTROLLER://:9093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka:9092"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@kafka-0.kafka:9093"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "true"
+            # design §9.9: 3 partitions (vs. compose's 1) so `replicas: 2`
+            # on the worker Deployment actually distributes work instead of
+            # one replica idling in the same consumer group.
+            - name: KAFKA_NUM_PARTITIONS
+              value: "3"
+            - name: CLUSTER_ID
+              value: "4L6g3nShT-eMCtK--X86sw"
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx512m"
+          volumeMounts:
+            - name: kafka-data
+              mountPath: /var/lib/kafka/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            tcpSocket:
+              port: 9092
+            periodSeconds: 15
+            failureThreshold: 3
+          # Найдено живым прогоном в kind (TASK-003): без `timeoutSeconds`
+          # k8s берёт значение по умолчанию — 1 секунду, а обе пробы ниже
+          # запускают shell-скрипт, поднимающий ЦЕЛУЮ JVM. За секунду она
+          # не стартует никогда, поэтому проба падала всегда: брокер уже
+          # обслуживал клиентов (топик создан, группа собрана из 2 воркеров),
+          # но под навсегда оставался 0/1 и kubelet его перезапускал.
+          # В docker-compose у того же healthcheck стоял `timeout: 10s` —
+          # при переносе в манифест это не перенеслось.
+          # `periodSeconds` держим больше таймаута, чтобы пробы не наслаивались.
+          readinessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            timeoutSeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+          startupProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            timeoutSeconds: 10
+            periodSeconds: 15
+            failureThreshold: 20
+      restartPolicy: Always
+  volumeClaimTemplates:
+    - metadata:
+        name: kafka-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

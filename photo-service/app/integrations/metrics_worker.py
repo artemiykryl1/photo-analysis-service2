@@ -10,6 +10,34 @@ process must never import it.
 
 from prometheus_client import Counter, Histogram
 
+# TASK-003 D1/A9 (tasks/TASK-003/20_design.md §11.1): observability for the
+# new image-preparation step (`app.services.image_prep`). Bucket boundaries
+# match the budget constants in `app.core.config.Settings`
+# (ANALYZER_MAX_IMAGE_BYTES = 3.5 MiB) so the histogram directly shows how
+# close prepared payloads run to that ceiling.
+analyzer_image_prepared_bytes = Histogram(
+    "analyzer_image_prepared_bytes",
+    "Size in bytes of the image payload actually sent to the analyzer "
+    "(after prepare_for_analysis)",
+    buckets=(64 * 1024, 256 * 1024, 1024 * 1024, 2 * 1024 * 1024, 3 * 1024 * 1024, 3.5 * 1024 * 1024),
+)
+
+analyzer_image_downscaled_total = Counter(
+    "analyzer_image_downscaled_total",
+    "Total analyzer calls whose image was downscaled before sending "
+    "(original did not fit the analyzer's size/side budget)",
+)
+
+# TASK-003 A2 (design §4.2): MinIO read failures classified as retryable
+# (STORAGE_UNAVAILABLE) or permanent (OBJECT_NOT_FOUND) by
+# app.services.analysis_errors.classify_error - kept separate from
+# `analyzer_grpc_errors_total` because these are not gRPC/analyzer failures.
+storage_read_errors_total = Counter(
+    "storage_read_errors_total",
+    "Total failures reading the photo's bytes from MinIO during analysis",
+    ["code"],
+)
+
 photo_analysis_started_total = Counter(
     "photo_analysis_started_total",
     "Total photos for which the worker won the atomic pending->processing claim",

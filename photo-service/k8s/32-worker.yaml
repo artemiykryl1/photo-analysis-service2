@@ -1,0 +1,95 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2/§9.6/§9.7/§9.8/§9.9): the
+# Kafka consumer. `replicas: 2` is safe by construction (design §9.9,
+# spec.md C3): the atomic `UPDATE photos SET status='processing' WHERE
+# status='pending'` claim, the idempotent `INSERT ... ON CONFLICT DO
+# NOTHING` result upsert, and the atomic batch-completion UPDATE together
+# make double-processing impossible even with two consumers in the same
+# group - this ONLY has an effect because `k8s/22-kafka.yaml` sets
+# `KAFKA_NUM_PARTITIONS: "3"` (compose keeps 1 partition + 1 replica).
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: photo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: worker
+  ports:
+    - port: 8001
+      targetPort: 8001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: photo-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      initContainers:
+        # design §9.6 (C1): same wait-for-schema gate as the api Deployment.
+        - name: wait-for-schema
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["uv", "run", "python", "-m", "app.db.wait_for_schema"]
+          envFrom:
+            - configMapRef:
+                name: photo-config
+            - secretRef:
+                name: photo-secrets
+      containers:
+        - name: worker
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          # Array (exec) form - no shell wrapper needed for SIGTERM to reach
+          # this process directly (Kubernetes sends the signal straight to
+          # PID 1 of the container), unlike docker-compose.yml's `sh -c
+          # "exec uv run ..."`, which needs the explicit `exec` precisely
+          # because it goes through a shell string.
+          command: ["uv", "run", "python", "-m", "app.worker.main"]
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: photo-config
+            - secretRef:
+                name: photo-secrets
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              # Pillow decode/resize + up to ~50MB of original bytes held in
+              # memory per in-flight message (design §5.4).
+              memory: "1Gi"
+          # design §9.7: no dedicated HTTP app exists for the worker, but
+          # `prometheus_client.start_http_server` (app/worker/main.py)
+          # already listens on WORKER_METRICS_PORT - reused as the probe
+          # instead of an exec probe (cheaper, no extra process spawned per
+          # check). Honest limitation, recorded here: this only proves the
+          # process is alive, not that the consumer loop is making progress
+          # - the real hang detector is the `WorkerStalled` Prometheus alert
+          # (design §11.3) on `worker_messages_processed_total` staying flat
+          # while `photos_pending` > 0.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: 8001
+            periodSeconds: 10
+            failureThreshold: 3
+      restartPolicy: Always

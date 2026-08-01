@@ -1,16 +1,23 @@
-// Contract for the (future) Analyzer Service gRPC interface.
+// Contract for the Analyzer Service gRPC interface.
 //
-// TASK-001 scope: definition only. No Python stubs are generated here (no
-// `grpcio-tools`/`protobuf` dependency added) - see
-// tasks/TASK-001/20_design.md §9. The real invocation path is asynchronous
-// via Kafka (`photos-to-analyze` / `analysis-results` topics per
-// constitution.md §2.4), not a direct gRPC call from photo-service; this
-// contract documents the analyzer-side request/response shape referenced
-// by `app/integrations/analyzer_client.py` (TODO(TASK-002)).
+// TASK-003 (tasks/TASK-003/20_design.md A1, tasks/TASK-003/05_spike_analyzer.md):
+// this contract is now implemented by a REAL external analyzer at
+// `45.132.19.101:50051` (plaintext/insecure - see A8), not just a future
+// placeholder. The package was renamed from `photo.analyzer.v1` to
+// `analyzer.v1` to match the real service's registered method path
+// exactly (`/analyzer.v1.PhotoAnalyzer/AnalyzePhoto`) - any mismatch here
+// makes every RPC fail with UNIMPLEMENTED. `image_bytes` and four response
+// fields (`eyes_closed_count`, `dominant_color`, `tags`, `model_version`)
+// were added because the real analyzer expects the caller to send the
+// actual image content (previously only `photo_id`/`object_key` were
+// sent) and returns a richer result than the original stub. The worker
+// invokes this synchronously via gRPC per `photo.analysis.requested`
+// Kafka message (constitution.md §2.4); `analyzer-stub/` implements the
+// same contract for local dev/CI (design §7/D6).
 
 syntax = "proto3";
 
-package photo.analyzer.v1;
+package analyzer.v1;
 
 service PhotoAnalyzer {
   rpc AnalyzePhoto(AnalyzePhotoRequest) returns (AnalyzePhotoResponse);
@@ -19,11 +26,21 @@ service PhotoAnalyzer {
 message AnalyzePhotoRequest {
   string photo_id = 1;
   string object_key = 2;
+  bytes  image_bytes = 3;  // TASK-003 A1: real analyzer requires the actual bytes,
+                            // capped to fit the server's 4 MiB gRPC message limit
+                            // (see app/services/image_prep.py, design §2).
 }
 
 message AnalyzePhotoResponse {
-  int32 faces_count = 1;
-  bool is_blurred = 2;
-  double blur_score = 3;
+  int32  faces_count = 1;
+  bool   is_blurred = 2;
+  double blur_score = 3;   // TASK-003 finding 3 (spike A3): Laplacian variance,
+                            // HIGHER = SHARPER, unbounded positive range. NOT
+                            // used by app.services.batch_service.select_best_photo
+                            // (design §3.4) - kept here only as the analyzer's raw field.
   string perceptual_hash = 4;
+  int32  eyes_closed_count = 5;    // TASK-003 A1: new field
+  string dominant_color = 6;       // TASK-003 A1: new field, hex e.g. "#feffff"
+  repeated string tags = 7;        // TASK-003 A1: new field, free-form labels
+  string model_version = 8;        // TASK-003 A1: new field, e.g. "opencv-dnn-res10-ssd+laplacian+phash/1.1.0"
 }

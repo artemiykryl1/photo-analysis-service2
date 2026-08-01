@@ -404,6 +404,80 @@ class TestGetPhoto:
         with pytest.raises(NotFoundError):
             await service.get_photo(session=AsyncMock(), photo_id=uuid.uuid4())
 
+    async def test_done_photo_response_includes_all_task_003_analysis_fields(self):
+        """spec.md TASK-003 criterion: "GET /v1/photos/{id} у done-фото
+        отдаёт eyes_closed_count, dominant_color, tags, model_version".
+        End-to-end through the real `PhotoService.get_photo` ->
+        `analysis_to_response` mapper -> Pydantic schema (only the
+        repository is faked)."""
+        from app.db.models import AnalysisResult
+
+        photo_id = uuid.uuid4()
+        found = MagicMock()
+        found.photo_id = photo_id
+        found.filename = "cat.jpg"
+        found.status = PhotoStatus.done
+        found.analysis = AnalysisResult(
+            faces_count=2,
+            is_blurred=False,
+            blur_score=930.47,
+            perceptual_hash="4b328abfe9f2fe69",
+            eyes_closed_count=1,
+            dominant_color="#f2fe69",
+            tags=["face", "bright"],
+            model_version="opencv-dnn-res10-ssd+laplacian+phash/1.1.0",
+        )
+
+        repository = AsyncMock()
+        repository.get_by_id.return_value = found
+        service = PhotoService(repository=repository, storage=MagicMock())
+
+        result = await service.get_photo(session=AsyncMock(), photo_id=photo_id)
+
+        assert result.status == "done"
+        assert result.analysis is not None
+        assert result.analysis.eyes_closed_count == 1
+        assert result.analysis.dominant_color == "#f2fe69"
+        assert result.analysis.tags == ["face", "bright"]
+        assert result.analysis.model_version == (
+            "opencv-dnn-res10-ssd+laplacian+phash/1.1.0"
+        )
+
+    async def test_pre_v003_done_photo_with_null_new_fields_does_not_break_the_response(self):
+        """spec.md TASK-003 criterion: "старые записи без новых полей не
+        ломают ответ" - a row analyzed before migration v003 has all four
+        new columns NULL; the response must still serialize successfully."""
+        from app.db.models import AnalysisResult
+
+        photo_id = uuid.uuid4()
+        found = MagicMock()
+        found.photo_id = photo_id
+        found.filename = "old.jpg"
+        found.status = PhotoStatus.done
+        found.analysis = AnalysisResult(
+            faces_count=1,
+            is_blurred=True,
+            blur_score=0.9,
+            perceptual_hash="oldhash",
+            eyes_closed_count=None,
+            dominant_color=None,
+            tags=None,
+            model_version=None,
+        )
+
+        repository = AsyncMock()
+        repository.get_by_id.return_value = found
+        service = PhotoService(repository=repository, storage=MagicMock())
+
+        result = await service.get_photo(session=AsyncMock(), photo_id=photo_id)
+
+        assert result.analysis is not None
+        assert result.analysis.eyes_closed_count is None
+        assert result.analysis.dominant_color is None
+        assert result.analysis.tags is None
+        assert result.analysis.model_version is None
+        result.model_dump_json()  # must serialize without raising
+
 
 class TestListPhotos:
     async def test_empty_repository_list_returns_empty_list(self):

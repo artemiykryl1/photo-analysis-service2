@@ -1,10 +1,12 @@
 """Behavioural coverage of `app.services.batch_service`.
 
-`select_best_photo` is the ЗАФИКСИРОВАНО pure function (design §12 step 22,
-Приложение) - sort key `is_blurred ASC, blur_score ASC, faces_count DESC,
-created_at ASC, photo_id ASC` over `done` photos only. It is exercised
-directly against in-memory ORM instances (no DB/session needed - see the
-module docstring in `app/services/batch_service.py`).
+`select_best_photo` is the ЗАФИКСИРОВАНО pure function, redefined by
+TASK-003 (tasks/TASK-003/20_design.md §3) - sort key `sharp_enough
+(blur_score >= SHARPNESS_THRESHOLD) DESC, faces_count DESC,
+eyes_closed_count ASC (NULL=0), blur_score DESC, created_at ASC, photo_id
+ASC` over `done` photos only. It is exercised directly against in-memory
+ORM instances (no DB/session needed - see the module docstring in
+`app/services/batch_service.py`).
 
 `BatchService.get_batch` is exercised with a mocked `BatchRepository` (same
 style as `PhotoService` tests): 404 on missing batch, `processing` while any
@@ -24,9 +26,15 @@ import pytest
 
 from app.core.errors import NotFoundError
 from app.db.models import AnalysisResult, Photo, PhotoStatus
-from app.services.batch_service import BatchService, select_best_photo
+from app.services.batch_service import SHARPNESS_THRESHOLD, BatchService, select_best_photo
 
 BASE_TIME = datetime(2026, 7, 18, 12, 0, 0, tzinfo=timezone.utc)
+
+# Comfortably on either side of SHARPNESS_THRESHOLD (100.0) - matches the
+# spike A3 measurements the threshold was picked from (blurry 0.4-2.9,
+# sharp 930-99 774).
+SHARP_SCORE = 930.0
+BLURRY_SCORE = 1.1
 
 
 def _photo(
@@ -35,6 +43,7 @@ def _photo(
     is_blurred: bool | None = None,
     blur_score: float | None = None,
     faces_count: int | None = None,
+    eyes_closed_count: int | None = None,
     created_at: datetime = BASE_TIME,
     photo_id: uuid.UUID | None = None,
 ) -> Photo:
@@ -51,8 +60,9 @@ def _photo(
             photo_id=photo_id,
             faces_count=faces_count if faces_count is not None else 1,
             is_blurred=bool(is_blurred),
-            blur_score=blur_score if blur_score is not None else 0.5,
+            blur_score=blur_score if blur_score is not None else SHARP_SCORE,
             perceptual_hash="abc123",
+            eyes_closed_count=eyes_closed_count,
         )
     else:
         photo.analysis = None
@@ -80,11 +90,15 @@ class TestSelectBestPhotoEmptyAndAllFailed:
 
 class TestSelectBestPhotoSingleDone:
     def test_single_done_photo_is_returned(self):
-        photo = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.2, faces_count=3)
+        photo = _photo(
+            status=PhotoStatus.done, is_blurred=False, blur_score=SHARP_SCORE, faces_count=3
+        )
         assert select_best_photo([photo]) == photo.photo_id
 
     def test_only_done_photos_considered_in_mixed_batch(self):
-        done = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.1, faces_count=2)
+        done = _photo(
+            status=PhotoStatus.done, is_blurred=False, blur_score=SHARP_SCORE, faces_count=2
+        )
         failed = _photo(status=PhotoStatus.failed)
         pending = _photo(status=PhotoStatus.pending)
         processing = _photo(status=PhotoStatus.processing)
@@ -95,40 +109,103 @@ class TestSelectBestPhotoSingleDone:
 
 
 class TestSelectBestPhotoTieBreakOrder:
-    """Sort key (is_blurred ASC, blur_score ASC, faces_count DESC,
-    created_at ASC, photo_id ASC) - ЗАФИКСИРОВАНО, tested one axis at a
-    time so a regression pinpoints exactly which comparator broke."""
+    """Sort key (TASK-003 redaction, design §3.2) - `sharp_enough
+    (blur_score >= SHARPNESS_THRESHOLD) DESC, faces_count DESC,
+    eyes_closed_count ASC (NULL=0), blur_score DESC, created_at ASC,
+    photo_id ASC` - ЗАФИКСИРОВАНО, tested one axis at a time so a
+    regression pinpoints exactly which comparator broke."""
 
-    def test_is_blurred_false_beats_true_regardless_of_other_fields(self):
-        sharp = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.9, faces_count=0)
-        blurry = _photo(status=PhotoStatus.done, is_blurred=True, blur_score=0.01, faces_count=5)
+    def test_is_blurred_does_not_affect_the_outcome(self):
+        """TASK-003 design §3.4: `is_blurred` is deliberately NOT part of
+        the formula (spike A3 found it always `True`, including for the
+        sharpest sample) - two otherwise-identical candidates must tie
+        regardless of what `is_blurred` says, with `photo_id` deciding."""
+        marked_blurred = _photo(
+            status=PhotoStatus.done,
+            is_blurred=True,
+            blur_score=SHARP_SCORE,
+            faces_count=2,
+            photo_id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        )
+        marked_sharp = _photo(
+            status=PhotoStatus.done,
+            is_blurred=False,
+            blur_score=SHARP_SCORE,
+            faces_count=2,
+            photo_id=uuid.UUID("00000000-0000-0000-0000-000000000002"),
+        )
 
-        assert select_best_photo([blurry, sharp]) == sharp.photo_id
+        # Only photo_id (the final tie-break) distinguishes them - is_blurred is ignored.
+        assert select_best_photo([marked_sharp, marked_blurred]) == marked_blurred.photo_id
 
-    def test_lower_blur_score_wins_when_is_blurred_tied(self):
-        low = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.1, faces_count=1)
-        high = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.5, faces_count=1)
+    def test_sharp_bucket_beats_blurry_bucket_even_with_worse_other_fields(self):
+        """First key is the coarse sharp/blurry bucket, not the raw
+        `blur_score` - a barely-sharp photo with zero faces still beats a
+        blurry photo with many faces, because bucket membership is
+        evaluated before anything else (design §3.3)."""
+        barely_sharp = _photo(
+            status=PhotoStatus.done, blur_score=SHARPNESS_THRESHOLD + 1, faces_count=0
+        )
+        blurry_but_full_of_faces = _photo(
+            status=PhotoStatus.done, blur_score=SHARPNESS_THRESHOLD - 1, faces_count=5
+        )
 
-        assert select_best_photo([high, low]) == low.photo_id
+        assert (
+            select_best_photo([blurry_but_full_of_faces, barely_sharp]) == barely_sharp.photo_id
+        )
 
-    def test_more_faces_wins_when_is_blurred_and_blur_score_tied(self):
-        few = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.3, faces_count=1)
-        many = _photo(status=PhotoStatus.done, is_blurred=False, blur_score=0.3, faces_count=5)
+    def test_more_faces_wins_within_the_same_sharpness_bucket(self):
+        few = _photo(status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=1)
+        many = _photo(status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=5)
 
         assert select_best_photo([few, many]) == many.photo_id
+
+    def test_fewer_closed_eyes_wins_when_bucket_and_faces_tied(self):
+        eyes_open = _photo(
+            status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=2, eyes_closed_count=0
+        )
+        eyes_closed = _photo(
+            status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=2, eyes_closed_count=2
+        )
+
+        assert select_best_photo([eyes_closed, eyes_open]) == eyes_open.photo_id
+
+    def test_null_eyes_closed_count_is_treated_as_zero(self):
+        """Pre-v003 rows (or an analyzer that didn't fill the field) have
+        `eyes_closed_count = NULL` - treated as "no closed eyes", not
+        penalized against an explicit `0` (design §3.3)."""
+        null_eyes = _photo(
+            status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=2, eyes_closed_count=None
+        )
+        one_closed_eye = _photo(
+            status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=2, eyes_closed_count=1
+        )
+
+        assert select_best_photo([one_closed_eye, null_eyes]) == null_eyes.photo_id
+
+    def test_higher_blur_score_wins_within_same_sharpness_bucket(self):
+        """TASK-003 A15: direction flipped from the old ASC (lower-is-
+        sharper) to DESC (higher-is-sharper), matching the real analyzer's
+        Laplacian-variance semantics (spike A3 finding 3)."""
+        less_sharp = _photo(
+            status=PhotoStatus.done, blur_score=SHARPNESS_THRESHOLD + 1, faces_count=1
+        )
+        more_sharp = _photo(
+            status=PhotoStatus.done, blur_score=SHARP_SCORE, faces_count=1
+        )
+
+        assert select_best_photo([less_sharp, more_sharp]) == more_sharp.photo_id
 
     def test_earlier_created_at_wins_when_everything_else_tied(self):
         earlier = _photo(
             status=PhotoStatus.done,
-            is_blurred=False,
-            blur_score=0.3,
+            blur_score=SHARP_SCORE,
             faces_count=2,
             created_at=BASE_TIME,
         )
         later = _photo(
             status=PhotoStatus.done,
-            is_blurred=False,
-            blur_score=0.3,
+            blur_score=SHARP_SCORE,
             faces_count=2,
             created_at=BASE_TIME + timedelta(seconds=5),
         )
@@ -143,16 +220,14 @@ class TestSelectBestPhotoTieBreakOrder:
         id_b = uuid.UUID("00000000-0000-0000-0000-000000000002")
         a = _photo(
             status=PhotoStatus.done,
-            is_blurred=False,
-            blur_score=0.3,
+            blur_score=SHARP_SCORE,
             faces_count=2,
             created_at=BASE_TIME,
             photo_id=id_a,
         )
         b = _photo(
             status=PhotoStatus.done,
-            is_blurred=False,
-            blur_score=0.3,
+            blur_score=SHARP_SCORE,
             faces_count=2,
             created_at=BASE_TIME,
             photo_id=id_b,

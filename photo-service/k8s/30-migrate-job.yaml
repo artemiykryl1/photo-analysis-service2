@@ -1,0 +1,87 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.6): migrations run as a `Job`,
+# NOT as an initContainer on the api/worker Deployments - an initContainer
+# runs once PER REPLICA, so with `replicas: 2` two `alembic upgrade head`
+# would race on a cold database (exactly what C4/§9.6 forbids). A `Job`
+# guarantees exactly one Pod runs the migration.
+#
+# `api`/`worker` do not depend on `kubectl apply` ordering to wait for this
+# Job - their own `wait-for-schema` initContainer (design §9.6, C1) polls
+# `alembic_version` and blocks their main container from starting until
+# this Job has completed successfully.
+#
+# review-1 MAJOR (NB-2/"Что нужно для APPROVE" п.4): on a cold `kubectl
+# apply -f k8s/` the Postgres StatefulSet and this Job start at roughly the
+# same time - `alembic upgrade head` fails outright while Postgres is still
+# initializing (first boot = image pull + initdb, routinely > 70s in kind).
+# `backoffLimit: 3` with kubelet's 10/20/40s restart backoff exhausts in
+# ~70s, i.e. almost always BEFORE Postgres is ready, permanently failing the
+# Job. Two independent mitigations: (1) a `wait-for-postgres` initContainer
+# that blocks on a raw TCP connect (not `alembic_version`, which does not
+# exist yet - THIS job is the one that creates it) before `alembic` ever
+# runs; (2) `backoffLimit` raised well above what the TCP wait should ever
+# need, as a second line of defense against a slow-but-not-infinite delay.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alembic-upgrade
+  namespace: photo-service
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-postgres
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          command:
+            - uv
+            - run
+            - python
+            - -c
+            - |
+              import socket
+              import sys
+              import time
+
+              host, port, timeout_seconds = "postgres", 5432, 120
+              deadline = time.monotonic() + timeout_seconds
+              while time.monotonic() < deadline:
+                  try:
+                      with socket.create_connection((host, port), timeout=2):
+                          sys.exit(0)
+                  except OSError:
+                      time.sleep(2)
+              print(f"postgres:{port} not reachable after {timeout_seconds}s", file=sys.stderr)
+              sys.exit(1)
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+      containers:
+        - name: alembic-upgrade
+          # Same image as api/worker - built locally and loaded via
+          # `kind load docker-image photo-service:local --name photo`
+          # (design §9.3). `:local` + `IfNotPresent` is required: with the
+          # default `Always` pull policy, kubelet would try to pull this
+          # tag from a registry that does not exist for it and fail with
+          # `ErrImagePull` (design §9.3, risk R10).
+          image: photo-service:local
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "uv run alembic upgrade head"]
+          envFrom:
+            - configMapRef:
+                name: photo-config
+            - secretRef:
+                name: photo-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"

@@ -1,0 +1,75 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2/§9.8): single-replica
+# PostgreSQL as a StatefulSet (stable network identity + PVC lifecycle tied
+# to the pod, unlike a Deployment). One replica only - this is a local
+# demo, not an HA setup; `constitution.md` doesn't require Postgres HA here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: photo-service
+spec:
+  clusterIP: None # headless - stable DNS name for the StatefulSet pod
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: photo-service
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: photo-secrets
+          env:
+            # Avoids the classic "directory not empty" first-boot failure
+            # when a PVC provisions a `lost+found` directory into the mount.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            periodSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

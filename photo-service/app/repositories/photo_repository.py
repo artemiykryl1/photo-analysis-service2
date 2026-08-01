@@ -160,12 +160,29 @@ class PhotoRepository:
         )
 
     async def fetch_unpublished(self, session: AsyncSession, limit: int) -> list[Photo]:
-        """Outbox poll: rows still `publish_status='not_sent'` (design §4.2)."""
+        """Outbox poll: rows still `publish_status='not_sent'` (design §4.2).
+
+        TASK-003 review-1 MAJOR-1: `api` runs with `replicas: 2` in
+        `k8s/31-api.yaml`, and `run_outbox_publisher` starts once per
+        replica (`app/main.py` lifespan) - without row-level locking, two
+        replicas polling in the same window would both select the same
+        `not_sent` rows and publish each of them twice to Kafka (the worker
+        stays correct either way thanks to its atomic claim + idempotent
+        upsert, but it doubles load on the shared external analyzer, which
+        several other students also depend on). `FOR UPDATE SKIP LOCKED`
+        makes this safe for any number of replicas: the caller
+        (`run_outbox_publisher`) holds this transaction open across the
+        whole batch and only commits (releasing the row locks) after
+        `mark_published`/skip-and-retry has been decided for every row it
+        selected, so a concurrent poller skips these rows entirely instead
+        of re-selecting them.
+        """
         result = await session.execute(
             select(Photo)
             .where(Photo.publish_status == "not_sent")
             .order_by(Photo.created_at)
             .limit(limit)
+            .with_for_update(skip_locked=True)
         )
         return list(result.scalars().all())
 

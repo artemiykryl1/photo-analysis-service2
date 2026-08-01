@@ -1,0 +1,225 @@
+# TASK-003 C3 (tasks/TASK-003/20_design.md §9.2): same provisioned
+# datasource + dashboard as docker-compose's grafana/provisioning/**,
+# grafana/dashboards/photo-service.json - kept in sync manually (ConfigMaps
+# cannot mount a file from outside their own `data`), pointing the
+# datasource at the in-cluster `prometheus:9090` Service.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: photo-service
+data:
+  datasource.yml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        # TASK-003 review-1 NB-3/MAJOR-3: must match the dashboard panels'
+        # "datasource": {"uid": "Prometheus"} below - without an explicit
+        # uid, Grafana assigns a random one and every panel breaks.
+        uid: Prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: true
+
+  dashboard-provider.yml: |
+    apiVersion: 1
+    providers:
+      - name: photo-service
+        orgId: 1
+        folder: ""
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: photo-service
+data:
+  photo-service.json: |
+    {
+      "title": "Photo Service",
+      "uid": "photo-service",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": true,
+      "timezone": "browser",
+      "time": { "from": "now-1h", "to": "now" },
+      "refresh": "10s",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Uploads per minute",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(photos_uploaded_total[1m])) * 60",
+              "legendFormat": "uploads/min",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Analysis duration (p95)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(photo_analysis_duration_seconds_bucket[5m])) by (le))",
+              "legendFormat": "p95 duration (s)",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "title": "Failed analyses",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(photo_analysis_failed_total[5m])) by (reason)",
+              "legendFormat": "{{reason}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "Pending photos",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "max(photos_pending{job=\"photo-api\"})",
+              "legendFormat": "pending",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "title": "Prepared image size (analyzer_image_prepared_bytes)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(analyzer_image_prepared_bytes_bucket[5m])) by (le))",
+              "legendFormat": "p50 bytes",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(analyzer_image_prepared_bytes_bucket[5m])) by (le))",
+              "legendFormat": "p95 bytes",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "title": "Downscaled images (rate)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "targets": [
+            {
+              "expr": "sum(rate(analyzer_image_downscaled_total[5m]))",
+              "legendFormat": "downscaled/s",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: photo-service
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: photo-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: photo-secrets
+                  key: GF_SECURITY_ADMIN_PASSWORD
+          volumeMounts:
+            - name: provisioning-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: provisioning-dashboards
+              mountPath: /etc/grafana/provisioning/dashboards
+            - name: dashboards
+              mountPath: /var/lib/grafana/dashboards
+          # Найдено живым прогоном в kind (TASK-003): при limits.memory=256Mi
+          # под уходил в OOMKill — Grafana на старте ставит бандл-плагины
+          # (metricsdrilldown, lokiexplore) и строит поисковые индексы, что
+          # заметно превышает четверть гигабайта. Симптом со стороны
+          # пользователя: дашборд открывается, потом «connection refused
+          # inside namespace» и `lost connection to pod` у port-forward.
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "768Mi"
+      volumes:
+        - name: provisioning-datasources
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: datasource.yml
+                path: datasource.yml
+        - name: provisioning-dashboards
+          configMap:
+            name: grafana-provisioning
+            items:
+              - key: dashboard-provider.yml
+                path: dashboard-provider.yml
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+      restartPolicy: Always
